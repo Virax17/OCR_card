@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CardScan OCR</title>
+    <title>CardScan LLM</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
     <header class="topbar">
       <div>
-        <div class="brand">CardScan OCR</div>
+        <div class="brand">CardScan LLM</div>
         <div id="health" class="health">Starting...</div>
       </div>
       <button id="downloadBtn" class="btn secondary" type="button">Download Excel</button>
@@ -21,14 +21,6 @@
         <label>
           Event
           <select id="eventSelect"></select>
-        </label>
-        <label>
-          OCR Mode
-          <select id="modeSelect">
-            <option value="balanced" selected>Balanced</option>
-            <option value="fast_local">Fast Local</option>
-            <option value="accuracy">Accuracy</option>
-          </select>
         </label>
         <div class="split">
           <label>

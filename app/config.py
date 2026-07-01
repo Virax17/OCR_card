@@ -16,7 +16,6 @@ DEFAULT_EVENT_ID = os.getenv("DEFAULT_EVENT_ID", "test_uploads")
 DEFAULT_EVENT_NAME = os.getenv("DEFAULT_EVENT_NAME", "Test Uploads")
 DEFAULT_EVENT_DATE = os.getenv("DEFAULT_EVENT_DATE", "2026-07-01")
 DEFAULT_COUNTRY = os.getenv("DEFAULT_COUNTRY", "IN")
-LLM_FALLBACK_ENABLED = os.getenv("LLM_FALLBACK_ENABLED", "false").lower() in {"1", "true", "yes"}
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_DAILY_REQUEST_LIMIT = int(os.getenv("GEMINI_DAILY_REQUEST_LIMIT", "50"))

@@ -4,7 +4,7 @@ import shutil
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -13,18 +13,12 @@ from app.config import (
     DEFAULT_EVENT_ID,
     DEFAULT_EVENT_NAME,
     EVENTS_ROOT,
-    LLM_FALLBACK_ENABLED,
     MAX_UPLOAD_BYTES,
 )
-from app.extraction.candidate_extractors import extract_candidates
-from app.extraction.field_resolver import resolve_record
 from app.imaging.preprocess import preprocess_image
-from app.llm.gemini_client import is_gemini_configured, structure_card_image, structure_ocr_text
+from app.llm.gemini_client import is_gemini_configured, structure_card_image
 from app.llm.usage_monitor import usage_snapshot
-from app.models import EventIn, EventOut, ProcessingResult, UpdateRecordIn, UploadResponse
-from app.ocr.ensemble import run_ocr_ensemble
-from app.ocr.paddle_engine import is_paddle_available
-from app.ocr.rapid_engine import is_rapid_available
+from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, UpdateRecordIn
 from app.storage.db import event_dir, initialize_event_database, new_id, utc_now
 from app.storage.excel_writer import export_records
 from app.storage.repositories import (
@@ -33,8 +27,6 @@ from app.storage.repositories import (
     find_duplicate_flag,
     get_event,
     insert_card_side,
-    insert_field_candidates,
-    insert_ocr_result,
     list_events,
     list_records,
     reset_event_data,
@@ -42,7 +34,7 @@ from app.storage.repositories import (
     upsert_card_record,
 )
 
-app = FastAPI(title="PaddleOCR Business Card Scanner")
+app = FastAPI(title="LLM Business Card Scanner")
 
 STATIC_DIR = Path("static")
 if STATIC_DIR.exists():
@@ -74,10 +66,8 @@ async def index() -> FileResponse:
 async def health() -> dict:
     return {
         "status": "ok",
-        "paddleocr_available": is_paddle_available(),
-        "rapidocr_available": is_rapid_available(),
+        "processing_mode": "gemini_vision_once",
         "gemini_configured": is_gemini_configured(),
-        "llm_fallback_enabled": LLM_FALLBACK_ENABLED,
         "storage_root": str(EVENTS_ROOT),
         "default_event_id": DEFAULT_EVENT_ID,
     }
@@ -136,23 +126,64 @@ def clear_event_artifacts(event_id: str) -> dict[str, int]:
     return cleared
 
 
-def apply_structured_fields(draft, fields: dict) -> None:
-    for field, value in fields.items():
-        if value and hasattr(draft, field) and not getattr(draft, field):
-            setattr(draft, field, value)
+def record_from_llm_fields(
+    *,
+    event_id: str,
+    event_name: str,
+    card_id: str,
+    front_image_filename: str,
+    back_image_filename: str | None,
+    fields: dict,
+) -> BusinessCardRecord:
+    now = utc_now()
+    low_confidence_fields = [
+        field
+        for field in ("name", "business", "phone_primary", "email")
+        if not fields.get(field)
+    ]
+    confidence = "High" if not low_confidence_fields[:2] and (fields.get("email") or fields.get("phone_primary")) else "Medium"
+    if len(low_confidence_fields) >= 3:
+        confidence = "Low"
+    return BusinessCardRecord(
+        record_id=new_id("record"),
+        card_id=card_id,
+        event_id=event_id,
+        date=now[:10],
+        time=now[11:19],
+        event_name=event_name,
+        name=fields.get("name"),
+        designation=fields.get("designation"),
+        company=fields.get("company") or fields.get("business"),
+        business=fields.get("business") or fields.get("company"),
+        phone_primary=fields.get("phone_primary"),
+        phone_number=fields.get("phone_number"),
+        mobile_number=fields.get("mobile_number"),
+        phone_extra=fields.get("phone_extra"),
+        fax_number=fields.get("fax_number"),
+        country_code=fields.get("country_code"),
+        email=fields.get("email"),
+        website=fields.get("website"),
+        address=fields.get("address"),
+        city=fields.get("city"),
+        state=fields.get("state"),
+        country=fields.get("country"),
+        zip_code=fields.get("zip_code"),
+        category=fields.get("category"),
+        confidence_score=confidence,
+        low_confidence_fields=low_confidence_fields,
+        front_image_filename=front_image_filename,
+        back_image_filename=back_image_filename,
+    )
 
 
-def needs_vision_fallback(draft) -> bool:
-    has_contact = bool(draft.email or draft.mobile_number or draft.phone_number or draft.phone_primary)
-    return not (draft.name and draft.business and has_contact)
-
-
-def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, back_upload: UploadFile | None, back_bytes: bytes | None, mode: str = "balanced") -> ProcessingResult:
+def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, back_upload: UploadFile | None, back_bytes: bytes | None) -> ProcessingResult:
     event = get_event(event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    if not is_gemini_configured():
+        raise HTTPException(status_code=503, detail="Gemini is not configured")
 
-    card_id = create_card(event_id)
+    card_id = create_card(event_id, processing_mode="gemini_vision_once")
     front_filename = save_side_file(event_id, card_id, "front", front_upload, front_bytes)
     back_filename = save_side_file(event_id, card_id, "back", back_upload, back_bytes) if back_upload and back_bytes else None
 
@@ -161,9 +192,8 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         if back_upload and back_bytes and back_filename:
             sides.append(("back", back_upload, back_bytes, back_filename))
 
-        merged_results = []
         for side, upload, raw_bytes, filename in sides:
-            processed, width, height, quality, warnings = preprocess_image(raw_bytes)
+            _, width, height, quality, warnings = preprocess_image(raw_bytes)
             insert_card_side(
                 event_id,
                 card_id=card_id,
@@ -175,50 +205,35 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
                 quality_score=quality,
                 quality_warnings=warnings,
             )
-            merged, engine_results = run_ocr_ensemble(processed, side, mode)
-            for result in engine_results:
-                insert_ocr_result(event_id, card_id, result)
-            insert_ocr_result(event_id, card_id, merged)
-            (event_dir(EVENTS_ROOT, event_id) / "ocr" / f"{card_id}_{side}.txt").write_text(merged.raw_text, encoding="utf-8")
-            merged_results.append(merged)
 
-        candidates = extract_candidates(merged_results)
-        insert_field_candidates(event_id, card_id, candidates)
-        draft = resolve_record(
+        fields = structure_card_image(
+            event_id=event_id,
+            front_image=front_bytes,
+            front_mime_type=front_upload.content_type or "image/jpeg",
+            back_image=back_bytes,
+            back_mime_type=back_upload.content_type if back_upload else None,
+        )
+        if not fields:
+            raise RuntimeError("Gemini Vision did not return structured fields")
+        draft = record_from_llm_fields(
             event_id=event_id,
             event_name=event.name,
             card_id=card_id,
             front_image_filename=front_filename,
             back_image_filename=back_filename,
-            ocr_results=merged_results,
-            candidates=candidates,
+            fields=fields,
         )
-        if LLM_FALLBACK_ENABLED and draft.confidence_score != "High":
-            front_text = next((result.raw_text for result in merged_results if result.side == "front"), "")
-            back_text = next((result.raw_text for result in merged_results if result.side == "back"), None)
-            llm_fields = structure_ocr_text(event_id, front_text, back_text)
-            apply_structured_fields(draft, llm_fields)
-        if LLM_FALLBACK_ENABLED and mode == "accuracy" and needs_vision_fallback(draft):
-            vision_fields = structure_card_image(
-                event_id=event_id,
-                front_image=front_bytes,
-                front_mime_type=front_upload.content_type or "image/jpeg",
-                back_image=back_bytes,
-                back_mime_type=back_upload.content_type if back_upload else None,
-            )
-            apply_structured_fields(draft, vision_fields)
         draft.duplicate_flag = find_duplicate_flag(event_id, email=draft.email, phone=draft.phone_primary, card_id=card_id)
         upsert_card_record(draft)
         return ProcessingResult(card=draft, status="needs_review" if draft.confidence_score == "Low" else "processed")
     except Exception as exc:
-        fallback = resolve_record(
+        fallback = record_from_llm_fields(
             event_id=event_id,
             event_name=event.name,
             card_id=card_id,
             front_image_filename=front_filename,
             back_image_filename=back_filename,
-            ocr_results=[],
-            candidates=[],
+            fields={},
         )
         fallback.low_confidence_fields = ["all"]
         fallback.confidence_score = "Low"
@@ -231,13 +246,12 @@ async def upload_card(
     event_id: str,
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
-    mode: str = Form(default="balanced"),
 ) -> ProcessingResult:
     front_bytes = await read_upload(front)
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
-    return process_card(event_id, front, front_bytes, back, back_bytes, mode)
+    return process_card(event_id, front, front_bytes, back, back_bytes)
 
 
 @app.post("/events/{event_id}/vision-scan")

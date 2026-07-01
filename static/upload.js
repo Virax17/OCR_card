@@ -21,9 +21,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function checkHealth() {
   try {
     const data = await fetchJson("/health");
-    $("#health").textContent = data.paddleocr_available
-      ? "API online - PaddleOCR ready"
-      : "API online - install PaddleOCR to process images";
+    $("#health").textContent = data.gemini_configured
+      ? "API online - Gemini Vision ready"
+      : "API online - configure Gemini to process images";
   } catch {
     $("#health").textContent = "API offline";
   }
@@ -54,8 +54,7 @@ async function uploadCard() {
   const form = new FormData();
   form.append("front", front);
   if (back) form.append("back", back);
-  form.append("mode", $("#modeSelect").value || "balanced");
-  setMessage("Processing card...");
+  setMessage("Processing card with one Gemini Vision call...");
   $("#processBtn").disabled = true;
   try {
     const result = await fetchJson(`/events/${state.eventId}/cards`, { method: "POST", body: form });

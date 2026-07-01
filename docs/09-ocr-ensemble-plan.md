@@ -1,6 +1,6 @@
 # OCR Ensemble Plan
 
-Status: First pass implemented  
+Status: Superseded by LLM-only processing  
 Last updated: 2026-07-01  
 Related: [[01-paddleocr-business-card-scanner-hld]], [[03-paddleocr-business-card-scanner-lld]], [[08-gemini-mcp-usage]]
 
@@ -592,6 +592,10 @@ Accuracy:
 ```
 
 The app stores each individual OCR result plus a final `ensemble / merged` OCR result in SQLite.
+
+## Current Decision
+
+The normal upload flow no longer uses local OCR. It sends the front image and optional back image to Gemini Vision once and stores the structured response. The local OCR ensemble code remains in the repository as a reference/possible future fallback, but it is not used by the UI upload path.
 
 ## Acceptance Criteria
 

@@ -5,11 +5,29 @@ Last updated: 2026-07-01
 
 ## Decisions
 
+### 2026-07-01: Use One Gemini Vision Call As Main Processing Path
+
+Decision:
+
+Use Gemini Vision once per card upload. Send the front image and optional back image together and store the structured response.
+
+Reason:
+
+The local OCR engines struggled with stylized business cards, logos, design-heavy layouts, and icon-based labels. One image-model call gives better extraction accuracy and predictable API usage.
+
+Impact:
+
+- Normal UI upload no longer runs PaddleOCR, RapidOCR, or OCR ensemble logic.
+- Each processed card consumes one Gemini request.
+- SQLite remains the source of truth.
+- Excel export still embeds front/back card images for manual verification.
+- Local OCR modules may remain as historical reference, but they are not part of the runtime path.
+
 ### 2026-07-01: Use PaddleOCR As Primary OCR Engine
 
 Decision:
 
-Use PaddleOCR as the primary OCR engine for business card image text extraction.
+Superseded. Earlier plan was to use PaddleOCR as the primary OCR engine for business card image text extraction.
 
 Reason:
 
@@ -25,7 +43,7 @@ Impact:
 
 Decision:
 
-Do not send every card to an LLM. Use deterministic extraction first and call the LLM only for low-confidence or conflicting records.
+Superseded. Earlier plan was to use deterministic extraction first and call the LLM only for low-confidence or conflicting records.
 
 Reason:
 

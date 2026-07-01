@@ -100,17 +100,13 @@ phone_primary -> normalized international number for duplicate matching
 
 ## App Fallback Behavior
 
-The normal upload flow still minimizes API use:
+The normal upload flow is now LLM-only:
 
 ```text
-Fast Local / Balanced:
-  local OCR ensemble first
-  Gemini text fallback only when confidence is not High
-
-Accuracy:
-  local OCR ensemble first
-  Gemini text fallback when confidence is not High
-  Gemini Vision fallback only if key fields are still missing
+Upload card:
+  send front image and optional back image together
+  call Gemini Vision once
+  store returned structured JSON
 ```
 
-Use `Accuracy` mode when a card has heavy design elements, unusual fonts, vertical text, glossy photos, or a busy background.
+This avoids local OCR failures on heavy design elements, unusual fonts, vertical text, glossy photos, or busy backgrounds. It also keeps API usage predictable: one Gemini request per processed card.

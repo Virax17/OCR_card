@@ -1,4 +1,4 @@
-# Business Card OCR Docs
+# Business Card LLM Scanner Docs
 
 Status: Review draft  
 Last updated: 2026-07-01  
@@ -6,9 +6,9 @@ Owner: Tritorc OCR project
 
 ## Purpose
 
-This folder is the Obsidian-friendly planning space for the PaddleOCR-based business card scanner.
+This folder is the Obsidian-friendly planning space for the business card scanner.
 
-The product goal is to scan one-sided or two-sided business cards, extract contact details accurately, and store the result in an Excel-compatible tabular structure while keeping LLM API usage minimal.
+The current product goal is to scan one-sided or two-sided business cards, extract contact details accurately with one Gemini Vision call per card, and store the result in an Excel-compatible tabular structure.
 
 ## Current Planning Docs
 
