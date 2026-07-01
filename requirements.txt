@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+python-dotenv
+Pillow
+openpyxl
+paddleocr
+paddlepaddle
+pytest
+google-genai
+onnxruntime
+rapidocr-onnxruntime

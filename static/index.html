@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CardScan OCR</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <div class="brand">CardScan OCR</div>
+        <div id="health" class="health">Starting...</div>
+      </div>
+      <button id="downloadBtn" class="btn secondary" type="button">Download Excel</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls">
+        <h1>Scan Business Card</h1>
+        <label>
+          Event
+          <select id="eventSelect"></select>
+        </label>
+        <label>
+          OCR Mode
+          <select id="modeSelect">
+            <option value="balanced" selected>Balanced</option>
+            <option value="fast_local">Fast Local</option>
+            <option value="accuracy">Accuracy</option>
+          </select>
+        </label>
+        <div class="split">
+          <label>
+            Front
+            <input id="frontInput" type="file" accept="image/*">
+          </label>
+          <label>
+            Back optional
+            <input id="backInput" type="file" accept="image/*">
+          </label>
+        </div>
+        <button id="processBtn" class="btn primary" type="button">Process Card</button>
+        <button id="resetBtn" class="btn danger" type="button">Start New File</button>
+        <div id="message" class="message"></div>
+        <div class="usage-box">
+          <div class="usage-title">Gemini Usage</div>
+          <div id="llmUsage" class="usage-metrics">Loading...</div>
+        </div>
+      </section>
+
+      <section class="panel records">
+        <div class="records-head">
+          <h2>Records</h2>
+          <button id="refreshBtn" class="btn secondary" type="button">Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Preview</th>
+                <th>Name</th>
+                <th>Company</th>
+                <th>Category</th>
+                <th>Code</th>
+                <th>Phone Number</th>
+                <th>Mobile Number</th>
+                <th>Fax</th>
+                <th>Email</th>
+                <th>Confidence</th>
+                <th>Duplicate</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="recordsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="editDialog">
+      <form method="dialog" id="editForm">
+        <h2>Edit Record</h2>
+        <input type="hidden" id="editCardId">
+        <label>Name<input id="editName"></label>
+        <label>Designation<input id="editDesignation"></label>
+        <label>Company<input id="editCompany"></label>
+        <label>Business<input id="editBusiness"></label>
+        <label>Country Code<input id="editCountryCode"></label>
+        <label>Phone Number<input id="editPhoneNumber"></label>
+        <label>Mobile Number<input id="editMobileNumber"></label>
+        <label>Fax Number<input id="editFaxNumber"></label>
+        <label>Email<input id="editEmail"></label>
+        <label>Website<input id="editWebsite"></label>
+        <label>Address<textarea id="editAddress"></textarea></label>
+        <label>Category<input id="editCategory"></label>
+        <div class="dialog-actions">
+          <button class="btn secondary" value="cancel" type="button" onclick="document.getElementById('editDialog').close()">Cancel</button>
+          <button id="saveEditBtn" class="btn primary" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="imageDialog" class="image-dialog">
+      <button id="closeImageBtn" class="modal-close" type="button">Close</button>
+      <img id="fullCardImage" alt="Business card full preview">
+    </dialog>
+
+    <script src="/static/upload.js"></script>
+  </body>
+</html>

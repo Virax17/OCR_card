@@ -1,0 +1,46 @@
+{
+  "name": "gemini-api-local",
+  "description": "Local Gemini API configuration for the OCR app. The API key is loaded from GEMINI_API_KEY in .env; do not hardcode secrets here.",
+  "env": {
+    "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+    "GEMINI_MODEL": "${GEMINI_MODEL}",
+    "GEMINI_DAILY_REQUEST_LIMIT": "${GEMINI_DAILY_REQUEST_LIMIT}",
+    "GEMINI_MINUTE_REQUEST_LIMIT": "${GEMINI_MINUTE_REQUEST_LIMIT}",
+    "GEMINI_DAILY_TOKEN_LIMIT": "${GEMINI_DAILY_TOKEN_LIMIT}"
+  },
+  "notes": [
+    "This is an MCP-style local config reference for agents/tools.",
+    "Actual OCR app usage is implemented in app/llm/.",
+    "Use Google AI Studio to view authoritative project-level rate limits and quota."
+  ],
+  "business_card_extraction_guidance": {
+    "source_samples": "D:/tritorc/ocr/data",
+    "front_side_priority": "Use the front side as the primary source for person name, designation, company/business, email, website, and direct contact numbers.",
+    "company_detection": [
+      "The company/business name is usually the top-most stylized logo or brand text on the front side.",
+      "The logo may be top-left or top-right and may be graphic/stylized rather than normal OCR body text.",
+      "Do not use branch names, office labels, building names, slogans, service-list headings, address landmarks, or back-side product lists as the company name."
+    ],
+    "back_side_handling": [
+      "Back sides often contain branch addresses, support facilities, product/service outlines, product photos, safety slogans, and we-sell lists.",
+      "Use back-side text for address and category support.",
+      "Do not replace front-side contact details with back-side branch-office numbers unless the front side is missing that field."
+    ],
+    "ignore_visual_noise": [
+      "Ignore QR codes, decorative icons, certification icons, product photos, separators, and handwritten notes unless printed text beside them is a contact field."
+    ],
+    "contact_labels": {
+      "phone_number": ["T", "Tel", "Telp", "Phone", "Office", "Landline"],
+      "mobile_number": ["M", "Mob", "Mobile", "HP", "Cell"],
+      "fax_number": ["F", "Fax"],
+      "email": ["E", "Email", "Mail", "Envelope icon"],
+      "website": ["W", "Web", "Website", "Globe icon", "Footer domain"]
+    },
+    "validation_rules": [
+      "Email must contain @ and a valid domain.",
+      "Website must be a printed domain or URL, not guessed from email unless separately printed.",
+      "For country_code, explicit phone prefixes such as +62, +91, and +971 win over address guesses.",
+      "If phone fields already include a prefix, separate country_code from local phone_number/mobile_number/fax_number."
+    ]
+  }
+}
