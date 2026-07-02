@@ -8,42 +8,100 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <div class="brand">CardScan LLM</div>
-        <div id="health" class="health">Starting...</div>
+      <div class="brand-wrap">
+        <div class="brand-mark">CS</div>
+        <div>
+          <div class="brand">CardScan LLM</div>
+          <div id="health" class="health">Starting...</div>
+        </div>
       </div>
       <div class="top-actions">
-        <button id="newEventBtn" class="btn ghost" type="button">New Event</button>
-        <button id="downloadBtn" class="btn secondary" type="button">Download Event Excel</button>
+        <select id="eventSelect" class="event-select"></select>
+        <button id="newEventBtn" class="btn ghost" type="button">+ New Event</button>
+        <button id="downloadBtn" class="btn primary" type="button">Download Excel</button>
       </div>
     </header>
 
     <main class="layout">
       <section class="panel controls">
         <div class="panel-title">
-          <h1>Scan Card</h1>
+          <div>
+            <h1>Add Cards</h1>
+            <p class="sub">Upload one card, prepare a batch, or capture from camera.</p>
+          </div>
           <span class="mode-pill">Vision OCR + Gemini</span>
         </div>
+
         <div class="event-box">
-          <label>
-            Event
-            <select id="eventSelect"></select>
-          </label>
+          <label class="field-label">Selected Event</label>
           <div id="eventMeta" class="event-meta">No event selected</div>
         </div>
-        <div class="split">
-          <label>
-            Front
-            <input id="frontInput" type="file" accept="image/*">
-          </label>
-          <label>
-            Back optional
-            <input id="backInput" type="file" accept="image/*">
-          </label>
+
+        <div class="tabs" role="tablist">
+          <button class="tab-btn active" data-tab="single" type="button">Single</button>
+          <button class="tab-btn" data-tab="bulk" type="button">Bulk Upload</button>
+          <button class="tab-btn" data-tab="camera" type="button">Camera</button>
         </div>
-        <button id="processBtn" class="btn primary" type="button">Process Card</button>
-        <button id="resetBtn" class="btn danger" type="button">Start New File</button>
+
+        <div class="tabpane active" id="tab-single">
+          <label class="field-label">Front Required</label>
+          <div class="file-slot">
+            <div class="file-icon">ID</div>
+            <div class="file-meta">
+              <strong id="frontFileName">No file chosen</strong>
+              <span>JPG, PNG, or WEBP up to the app upload limit</span>
+            </div>
+            <label class="choose">Browse<input id="frontInput" type="file" accept="image/*"></label>
+          </div>
+
+          <label class="field-label">Back Optional</label>
+          <div class="file-slot">
+            <div class="file-icon">ID</div>
+            <div class="file-meta">
+              <strong id="backFileName">No file chosen</strong>
+              <span>Use when contact details continue on side two</span>
+            </div>
+            <label class="choose">Browse<input id="backInput" type="file" accept="image/*"></label>
+          </div>
+        </div>
+
+        <div class="tabpane" id="tab-bulk">
+          <div class="dropzone" id="dropzone">
+            <div class="drop-icon">UP</div>
+            <strong>Drag and drop multiple card images</strong>
+            <span>Each image is processed as one front-only business card.</span>
+            <input id="bulkInput" type="file" multiple accept="image/*">
+          </div>
+          <button id="confirmBulkBtn" class="btn outline process-btn" type="button" disabled>Confirm Bulk Selection</button>
+          <div id="bulkQueue" class="queue-list"></div>
+        </div>
+
+        <div class="tabpane" id="tab-camera">
+          <div class="camera-box" id="cameraBox">
+            <div class="camera-placeholder" id="cameraPlaceholder">
+              Camera preview will appear here when camera capture is wired.
+            </div>
+          </div>
+          <div class="camera-controls">
+            <button id="enableCamBtn" class="btn outline" type="button">Enable Camera</button>
+            <button id="shutterBtn" class="shutter" type="button" aria-label="Capture card" hidden></button>
+          </div>
+          <div id="cameraQueue" class="queue-list"></div>
+        </div>
+
+        <button id="processBtn" class="btn primary process-btn" type="button">Process Card</button>
+        <button id="resetBtn" class="btn danger process-btn" type="button">Start New File</button>
         <div id="message" class="message"></div>
+
+        <div class="progress-panel" id="progressPanel" hidden>
+          <div class="progress-head">
+            <h3 id="progressTitle">Processing Queue</h3>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-bar-track"><div class="progress-bar-fill" id="progressFill"></div></div>
+          <div id="ticketList"></div>
+        </div>
+
         <div class="usage-box">
           <div class="usage-title">API Usage</div>
           <div id="llmUsage" class="usage-metrics">Loading...</div>
@@ -57,7 +115,7 @@
             <div id="recordSummary" class="record-summary">Loading records...</div>
           </div>
           <div class="records-actions">
-            <button id="refreshBtn" class="btn secondary" type="button">Refresh</button>
+            <button id="refreshBtn" class="btn outline" type="button">Refresh</button>
             <button id="downloadBtnInline" class="btn primary" type="button">Download Excel</button>
           </div>
         </div>
@@ -65,9 +123,9 @@
           <table>
             <thead>
               <tr>
-                <th>Preview</th>
+                <th>Card</th>
                 <th>Name</th>
-                <th>Company</th>
+                <th>Business</th>
                 <th>Category</th>
                 <th>Contact1</th>
                 <th>Contact2</th>
@@ -103,7 +161,7 @@
         <label>Address<textarea id="editAddress"></textarea></label>
         <label>Category<input id="editCategory"></label>
         <div class="dialog-actions">
-          <button class="btn secondary" value="cancel" type="button" onclick="document.getElementById('editDialog').close()">Cancel</button>
+          <button class="btn outline" value="cancel" type="button" onclick="document.getElementById('editDialog').close()">Cancel</button>
           <button id="saveEditBtn" class="btn primary" value="default">Save</button>
         </div>
       </form>
@@ -116,7 +174,7 @@
         <label>Date<input id="eventDate" type="date" required></label>
         <label>Location<input id="eventLocation" placeholder="Singapore, Malaysia, Indonesia"></label>
         <div class="dialog-actions">
-          <button class="btn secondary" value="cancel" type="button" onclick="document.getElementById('eventDialog').close()">Cancel</button>
+          <button class="btn outline" value="cancel" type="button" onclick="document.getElementById('eventDialog').close()">Cancel</button>
           <button id="saveEventBtn" class="btn primary" value="default">Create</button>
         </div>
       </form>

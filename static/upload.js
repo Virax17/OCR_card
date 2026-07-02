@@ -1,9 +1,17 @@
-const state = { eventId: "test_uploads", events: [], records: [] };
+const state = {
+  eventId: "test_uploads",
+  events: [],
+  records: [],
+  activeMode: "single",
+  bulkFiles: [],
+  bulkConfirmed: false,
+  processing: false,
+};
 
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", async () => {
-  $("#processBtn").addEventListener("click", uploadCard);
+  $("#processBtn").addEventListener("click", processActiveMode);
   $("#refreshBtn").addEventListener("click", refreshRecords);
   $("#resetBtn").addEventListener("click", resetCurrentEvent);
   $("#downloadBtn").addEventListener("click", downloadExcel);
@@ -15,11 +23,160 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#imageDialog").addEventListener("click", (event) => {
     if (event.target.id === "imageDialog") $("#imageDialog").close();
   });
+  setupTabs();
+  setupFileLabels();
+  setupBulkPreview();
+  setupCameraPreview();
+  updateProcessButton();
   await checkHealth();
   await loadEvents();
   await loadRecords();
   await loadUsage();
 });
+
+function setupTabs() {
+  document.querySelectorAll(".tab-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".tab-btn").forEach((item) => item.classList.remove("active"));
+      document.querySelectorAll(".tabpane").forEach((pane) => pane.classList.remove("active"));
+      button.classList.add("active");
+      $(`#tab-${button.dataset.tab}`).classList.add("active");
+      state.activeMode = button.dataset.tab;
+      updateProcessButton();
+      if (button.dataset.tab === "bulk") {
+        setMessage(state.bulkFiles.length ? "Confirm the selected bulk images before processing." : "Add images, confirm selection, then process the batch.");
+      } else if (button.dataset.tab === "camera") {
+        setMessage("Capture a card image. It will be added as the front image for single-card processing.");
+      } else {
+        setMessage("");
+      }
+    });
+  });
+}
+
+function setupFileLabels() {
+  $("#frontInput").addEventListener("change", () => updateFileLabel("frontInput", "frontFileName"));
+  $("#backInput").addEventListener("change", () => updateFileLabel("backInput", "backFileName"));
+}
+
+function updateFileLabel(inputId, labelId) {
+  const file = $(`#${inputId}`).files[0];
+  $(`#${labelId}`).textContent = file ? file.name : "No file chosen";
+}
+
+function setupBulkPreview() {
+  const dropzone = $("#dropzone");
+  const bulkInput = $("#bulkInput");
+  if (!dropzone || !bulkInput) return;
+  dropzone.addEventListener("click", () => bulkInput.click());
+  $("#confirmBulkBtn").addEventListener("click", confirmBulkSelection);
+  bulkInput.addEventListener("change", () => setBulkFiles(bulkInput.files));
+  ["dragenter", "dragover"].forEach((name) => {
+    dropzone.addEventListener(name, (event) => {
+      event.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach((name) => {
+    dropzone.addEventListener(name, (event) => {
+      event.preventDefault();
+      dropzone.classList.remove("dragover");
+    });
+  });
+  dropzone.addEventListener("drop", (event) => {
+    setBulkFiles(event.dataTransfer.files);
+  });
+}
+
+function setBulkFiles(files) {
+  state.bulkFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
+  state.bulkConfirmed = false;
+  renderPreviewQueue(state.bulkFiles, "bulkQueue", "Needs confirmation");
+  $("#confirmBulkBtn").disabled = !state.bulkFiles.length;
+  updateProcessButton();
+  if (state.bulkFiles.length) {
+    setMessage(`${state.bulkFiles.length} image${state.bulkFiles.length === 1 ? "" : "s"} selected. Click Confirm Bulk Selection.`);
+  }
+}
+
+function confirmBulkSelection() {
+  if (!state.bulkFiles.length) return setMessage("Add bulk images first.");
+  state.bulkConfirmed = true;
+  renderPreviewQueue(state.bulkFiles, "bulkQueue", "Confirmed");
+  $("#confirmBulkBtn").disabled = true;
+  updateProcessButton();
+  setMessage(`${state.bulkFiles.length} bulk card${state.bulkFiles.length === 1 ? "" : "s"} confirmed. Click Process ${state.bulkFiles.length} Cards.`);
+}
+
+function renderPreviewQueue(files, queueId, statusText) {
+  const queue = $(`#${queueId}`);
+  const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
+  queue.innerHTML = imageFiles.map((file) => `
+    <div class="queue-item">
+      <img src="${URL.createObjectURL(file)}" alt="">
+      <div class="qmeta"><strong>${escapeHtml(file.name)}</strong><span>${escapeHtml(statusText)}</span></div>
+    </div>
+  `).join("");
+  if (imageFiles.length) setMessage(`${imageFiles.length} image${imageFiles.length === 1 ? "" : "s"} added to preview queue.`);
+}
+
+function setupCameraPreview() {
+  const enableButton = $("#enableCamBtn");
+  const shutterButton = $("#shutterBtn");
+  const cameraBox = $("#cameraBox");
+  if (!enableButton || !shutterButton || !cameraBox) return;
+  let video;
+  enableButton.addEventListener("click", async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      cameraBox.innerHTML = `<div class="camera-placeholder">Camera capture is not available in this browser.</div>`;
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      video = document.createElement("video");
+      video.autoplay = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      cameraBox.innerHTML = "";
+      cameraBox.appendChild(video);
+      shutterButton.hidden = false;
+      enableButton.textContent = "Camera On";
+      enableButton.disabled = true;
+    } catch {
+      cameraBox.innerHTML = `<div class="camera-placeholder">Could not access camera. Check browser permissions.</div>`;
+    }
+  });
+  shutterButton.addEventListener("click", async () => {
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 960;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) return;
+    const file = new File([blob], `camera-card-${Date.now()}.jpg`, { type: "image/jpeg" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    $("#frontInput").files = transfer.files;
+    updateFileLabel("frontInput", "frontFileName");
+    renderPreviewQueue([file], "cameraQueue", "Captured to front image");
+    document.querySelector('[data-tab="single"]').click();
+    setMessage("Camera capture added as the front image. Click Process Card.");
+  });
+}
+
+function updateProcessButton() {
+  const button = $("#processBtn");
+  if (!button) return;
+  if (state.processing) return;
+  if (state.activeMode === "bulk") {
+    button.textContent = state.bulkFiles.length ? `Process ${state.bulkFiles.length} Card${state.bulkFiles.length === 1 ? "" : "s"}` : "Process Bulk Cards";
+    button.disabled = !state.bulkFiles.length || !state.bulkConfirmed;
+    return;
+  }
+  button.textContent = "Process Card";
+  button.disabled = false;
+}
 
 async function checkHealth() {
   try {
@@ -101,6 +258,11 @@ async function createEvent(event) {
   }
 }
 
+async function processActiveMode() {
+  if (state.activeMode === "bulk") return uploadBulkCards();
+  return uploadCard();
+}
+
 async function uploadCard() {
   const front = $("#frontInput").files[0];
   const back = $("#backInput").files[0];
@@ -109,19 +271,141 @@ async function uploadCard() {
   form.append("front", front);
   if (back) form.append("back", back);
   setMessage("Processing card with Google Vision OCR and Gemini sorting...");
+  state.processing = true;
   $("#processBtn").disabled = true;
+  $("#processBtn").textContent = "Processing...";
+  const progress = startSingleProgress(front.name);
   try {
     const result = await fetchJson(`/events/${state.eventId}/cards`, { method: "POST", body: form });
+    finishSingleProgress(result.status === "error" ? "error" : "done", result.error_message || "Saved to records");
     setMessage(result.error_message || `Processed with ${result.card.confidence_score} confidence.`);
     $("#frontInput").value = "";
     $("#backInput").value = "";
+    updateFileLabel("frontInput", "frontFileName");
+    updateFileLabel("backInput", "backFileName");
     await loadRecords();
     await loadUsage();
   } catch (error) {
+    finishSingleProgress("error", error.message);
     setMessage(error.message);
   } finally {
-    $("#processBtn").disabled = false;
+    window.clearInterval(progress);
+    state.processing = false;
+    updateProcessButton();
   }
+}
+
+async function uploadBulkCards() {
+  if (!state.bulkFiles.length) return setMessage("Add bulk images first.");
+  if (!state.bulkConfirmed) return setMessage("Confirm the bulk selection before processing.");
+  state.processing = true;
+  $("#processBtn").disabled = true;
+  $("#processBtn").textContent = "Processing...";
+  $("#confirmBulkBtn").disabled = true;
+  showProgressTickets(state.bulkFiles);
+  let successCount = 0;
+  let failCount = 0;
+  setMessage(`Processing ${state.bulkFiles.length} bulk cards...`);
+  for (let index = 0; index < state.bulkFiles.length; index += 1) {
+    const file = state.bulkFiles[index];
+    updateTicket(index, "busy", "Vision OCR + Gemini");
+    try {
+      const form = new FormData();
+      form.append("front", file);
+      const result = await fetchJson(`/events/${state.eventId}/cards`, { method: "POST", body: form });
+      if (result.status === "error") {
+        failCount += 1;
+        updateTicket(index, "error", result.error_message || "Failed");
+      } else {
+        successCount += 1;
+        updateTicket(index, "done", result.card?.confidence_score ? `Done - ${result.card.confidence_score}` : "Done");
+      }
+    } catch (error) {
+      failCount += 1;
+      updateTicket(index, "error", error.message);
+    }
+    updateProgress(index + 1, state.bulkFiles.length);
+    await loadUsage();
+  }
+  await loadRecords();
+  state.bulkFiles = [];
+  state.bulkConfirmed = false;
+  $("#bulkInput").value = "";
+  $("#bulkQueue").innerHTML = "";
+  setMessage(`Bulk processing complete. ${successCount} done, ${failCount} failed.`);
+  state.processing = false;
+  updateProcessButton();
+}
+
+function showProgressTickets(files) {
+  $("#progressPanel").hidden = false;
+  $("#progressTitle").textContent = files.length === 1 ? "Processing Card" : "Processing Bulk Queue";
+  $("#progressFill").style.width = "0%";
+  $("#progressFill").classList.add("active");
+  $("#progressPercent").textContent = "0%";
+  $("#ticketList").innerHTML = files.map((file, index) => `
+    <div class="ticket" data-ticket-index="${index}">
+      <div class="status-icon queued">...</div>
+      <div class="tname">${escapeHtml(file.name)}</div>
+      <div class="tstage">Queued</div>
+    </div>
+  `).join("");
+}
+
+function updateTicket(index, status, stage) {
+  const ticket = document.querySelector(`[data-ticket-index="${index}"]`);
+  if (!ticket) return;
+  const icon = ticket.querySelector(".status-icon");
+  const stageEl = ticket.querySelector(".tstage");
+  ticket.classList.toggle("scanning", status === "busy");
+  icon.className = `status-icon ${status}`;
+  icon.textContent = status === "done" ? "OK" : status === "error" ? "!" : "...";
+  stageEl.textContent = stage;
+}
+
+function updateProgress(done, total) {
+  const percent = Math.round((done / total) * 100);
+  $("#progressFill").style.width = `${percent}%`;
+  $("#progressPercent").textContent = `${percent}%`;
+  if (percent >= 100) $("#progressFill").classList.remove("active");
+}
+
+function startSingleProgress(fileName) {
+  $("#progressPanel").hidden = false;
+  $("#progressTitle").textContent = "Processing Card";
+  $("#progressFill").classList.add("active");
+  $("#progressFill").style.width = "8%";
+  $("#progressPercent").textContent = "8%";
+  $("#ticketList").innerHTML = `
+    <div class="ticket scanning" data-ticket-index="0">
+      <div class="status-icon busy">...</div>
+      <div class="tname">${escapeHtml(fileName)}</div>
+      <div class="tstage">Uploading image</div>
+    </div>
+  `;
+  const stages = [
+    [20, "Google Vision OCR"],
+    [45, "Extracting field candidates"],
+    [70, "Gemini sorting"],
+    [86, "Validating fields"],
+    [94, "Saving record"],
+  ];
+  let index = 0;
+  return window.setInterval(() => {
+    if (index >= stages.length) return;
+    const [percent, label] = stages[index];
+    $("#progressFill").style.width = `${percent}%`;
+    $("#progressPercent").textContent = `${percent}%`;
+    updateTicket(0, "busy", label);
+    index += 1;
+  }, 1200);
+}
+
+function finishSingleProgress(status, label) {
+  $("#progressFill").style.width = "100%";
+  $("#progressPercent").textContent = "100%";
+  $("#progressFill").classList.remove("active");
+  updateTicket(0, status, label);
 }
 
 async function loadRecords() {
@@ -144,9 +428,9 @@ async function loadRecords() {
       <td>${escapeHtml(record.name || "")}</td>
       <td>${escapeHtml(record.business || record.company || "")}</td>
       <td>${escapeHtml(record.category || "")}</td>
-      <td>${escapeHtml(record.contact1 || "")}</td>
-      <td>${escapeHtml(record.contact2 || "")}</td>
-      <td>${escapeHtml(record.contact3 || "")}</td>
+      <td>${escapeHtml(formatPhoneForDisplay(record.contact1 || record.mobile_number || record.phone_primary, record.country_code))}</td>
+      <td>${escapeHtml(formatPhoneForDisplay(record.contact2 || record.phone_number, record.country_code))}</td>
+      <td>${escapeHtml(formatPhoneForDisplay(record.contact3 || record.fax_number, record.country_code))}</td>
       <td>${escapeHtml(record.email1 || record.email || "")}</td>
       <td><span class="badge ${escapeHtml(record.confidence_score)}">${escapeHtml(record.confidence_score)}</span></td>
       <td>${escapeHtml(record.duplicate_flag || "No")}</td>
@@ -342,6 +626,21 @@ function downloadExcel() {
 
 function setMessage(message) {
   $("#message").textContent = message;
+}
+
+function formatPhoneForDisplay(value, countryCode) {
+  if (!value) return "";
+  const digits = String(value).replace(/\D/g, "");
+  if (!digits) return String(value).trim();
+  let codeDigits = String(countryCode || "").replace(/\D/g, "");
+  if (!codeDigits && String(value).trim().startsWith("+")) {
+    const knownCodes = ["91", "62", "971", "966", "974", "968", "965", "973", "1", "44", "65", "60"];
+    codeDigits = knownCodes.find((code) => digits.startsWith(code)) || "";
+  }
+  let national = digits;
+  if (codeDigits && national.startsWith(codeDigits)) national = national.slice(codeDigits.length);
+  national = national.replace(/^0+/, "") || digits;
+  return codeDigits ? `(+${codeDigits}) ${national}` : national;
 }
 
 async function fetchJson(url, options = {}) {

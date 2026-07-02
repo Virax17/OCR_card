@@ -99,6 +99,28 @@ def national_phone_number(value: str | None, country_code: str | None = None) ->
     return digits.lstrip("0") or None
 
 
+def format_phone_for_display(value: str | None, country_code: str | None = None) -> str | None:
+    if not value:
+        return None
+    digits = re.sub(r"\D", "", value)
+    if not digits:
+        return value.strip() or None
+    code_digits = re.sub(r"\D", "", country_code or "")
+    if not code_digits and str(value).strip().startswith("+"):
+        for _, _, dial_code, _ in COUNTRY_HINTS:
+            candidate_code = re.sub(r"\D", "", dial_code)
+            if digits.startswith(candidate_code):
+                code_digits = candidate_code
+                break
+    national = digits
+    if code_digits and national.startswith(code_digits):
+        national = national[len(code_digits):]
+    national = national.lstrip("0") or digits
+    if code_digits:
+        return f"(+{code_digits}) {national}"
+    return national
+
+
 def normalize_website(value: str | None) -> str | None:
     if not value:
         return None

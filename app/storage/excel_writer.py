@@ -6,9 +6,13 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from PIL import Image as PillowImage
 
 from app.config import EXCEL_COLUMNS, EXCEL_HEADERS
+from app.extraction.field_resolver import format_phone_for_display
 from app.models import BusinessCardRecord
+
+EXCEL_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 def export_records(records: list[BusinessCardRecord], output_path: str | Path) -> Path:
@@ -29,9 +33,12 @@ def export_records(records: list[BusinessCardRecord], output_path: str | Path) -
         values["business"] = record.business or record.company
         values["date"] = f"{record.date} {record.time}".strip()
         values["email1"] = record.email1 or record.email
-        values["contact1"] = record.contact1 or record.mobile_number or record.phone_primary
-        values["contact2"] = record.contact2 or record.phone_number
-        values["contact3"] = record.contact3 or record.fax_number
+        values["contact1"] = format_phone_for_display(
+            record.contact1 or record.mobile_number or record.phone_primary,
+            record.country_code,
+        )
+        values["contact2"] = format_phone_for_display(record.contact2 or record.phone_number, record.country_code)
+        values["contact3"] = format_phone_for_display(record.contact3 or record.fax_number, record.country_code)
         values["low_confidence_fields"] = ", ".join(record.low_confidence_fields)
         values["reviewed_by_user"] = "Yes" if record.reviewed_by_user else "No"
         values["card"] = ""
@@ -60,9 +67,24 @@ def export_records(records: list[BusinessCardRecord], output_path: str | Path) -
 def _add_card_image(ws, image_path: Path, row_index: int, column: str) -> None:
     if not image_path.exists() or column not in EXCEL_COLUMNS:
         return
+    image_path = _excel_safe_image_path(image_path)
     col_idx = EXCEL_COLUMNS.index(column) + 1
     anchor = f"{get_column_letter(col_idx)}{row_index}"
     image = ExcelImage(str(image_path))
     image.width = 140
     image.height = 84
     ws.add_image(image, anchor)
+
+
+def _excel_safe_image_path(image_path: Path) -> Path:
+    if image_path.suffix.lower() in EXCEL_IMAGE_EXTENSIONS:
+        return image_path
+    cache_dir = image_path.parent / ".excel_image_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    safe_path = cache_dir / f"{image_path.stem}.png"
+    if safe_path.exists() and safe_path.stat().st_mtime >= image_path.stat().st_mtime:
+        return safe_path
+    with PillowImage.open(image_path) as source:
+        image = source.convert("RGB")
+        image.save(safe_path, "PNG")
+    return safe_path

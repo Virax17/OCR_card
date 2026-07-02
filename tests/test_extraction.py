@@ -1,5 +1,5 @@
 from app.extraction.candidate_extractors import extract_candidates
-from app.extraction.field_resolver import resolve_record
+from app.extraction.field_resolver import format_phone_for_display, resolve_record
 from app.models import OCRSideResult, OCRTextBlock
 
 
@@ -117,3 +117,9 @@ def test_labeled_phone_mobile_and_fax_are_separated() -> None:
     assert record.phone_number == "2129770999"
     assert record.mobile_number == "81236678953"
     assert record.fax_number == "2129770988"
+
+
+def test_phone_display_format_wraps_country_code() -> None:
+    assert format_phone_for_display("6281236678953", "+62") == "(+62) 81236678953"
+    assert format_phone_for_display("81236678953", "+62") == "(+62) 81236678953"
+    assert format_phone_for_display("+91 98765 43210", None) == "(+91) 9876543210"

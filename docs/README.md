@@ -23,6 +23,7 @@ The current product goal is to scan one-sided or two-sided business cards, extra
 - [[09-ocr-ensemble-plan]]
 - [[10-business-card-sample-learning]]
 - [[11-google-vision-ocr-runtime]]
+- [[12-deployment-security-plan]]
 
 ## Runtime Summary
 
