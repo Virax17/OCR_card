@@ -12,16 +12,25 @@
         <div class="brand">CardScan LLM</div>
         <div id="health" class="health">Starting...</div>
       </div>
-      <button id="downloadBtn" class="btn secondary" type="button">Download Excel</button>
+      <div class="top-actions">
+        <button id="newEventBtn" class="btn ghost" type="button">New Event</button>
+        <button id="downloadBtn" class="btn secondary" type="button">Download Event Excel</button>
+      </div>
     </header>
 
     <main class="layout">
       <section class="panel controls">
-        <h1>Scan Business Card</h1>
-        <label>
-          Event
-          <select id="eventSelect"></select>
-        </label>
+        <div class="panel-title">
+          <h1>Scan Card</h1>
+          <span class="mode-pill">Vision OCR + Gemini</span>
+        </div>
+        <div class="event-box">
+          <label>
+            Event
+            <select id="eventSelect"></select>
+          </label>
+          <div id="eventMeta" class="event-meta">No event selected</div>
+        </div>
         <div class="split">
           <label>
             Front
@@ -36,15 +45,21 @@
         <button id="resetBtn" class="btn danger" type="button">Start New File</button>
         <div id="message" class="message"></div>
         <div class="usage-box">
-          <div class="usage-title">Gemini Usage</div>
+          <div class="usage-title">API Usage</div>
           <div id="llmUsage" class="usage-metrics">Loading...</div>
         </div>
       </section>
 
       <section class="panel records">
         <div class="records-head">
-          <h2>Records</h2>
-          <button id="refreshBtn" class="btn secondary" type="button">Refresh</button>
+          <div>
+            <h2>Event Records</h2>
+            <div id="recordSummary" class="record-summary">Loading records...</div>
+          </div>
+          <div class="records-actions">
+            <button id="refreshBtn" class="btn secondary" type="button">Refresh</button>
+            <button id="downloadBtnInline" class="btn primary" type="button">Download Excel</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -54,11 +69,10 @@
                 <th>Name</th>
                 <th>Company</th>
                 <th>Category</th>
-                <th>Code</th>
-                <th>Phone Number</th>
-                <th>Mobile Number</th>
-                <th>Fax</th>
-                <th>Email</th>
+                <th>Contact1</th>
+                <th>Contact2</th>
+                <th>Contact3</th>
+                <th>Email1</th>
                 <th>Confidence</th>
                 <th>Duplicate</th>
                 <th></th>
@@ -78,17 +92,32 @@
         <label>Designation<input id="editDesignation"></label>
         <label>Company<input id="editCompany"></label>
         <label>Business<input id="editBusiness"></label>
-        <label>Country Code<input id="editCountryCode"></label>
-        <label>Phone Number<input id="editPhoneNumber"></label>
-        <label>Mobile Number<input id="editMobileNumber"></label>
-        <label>Fax Number<input id="editFaxNumber"></label>
-        <label>Email<input id="editEmail"></label>
+        <label>Email1<input id="editEmail1"></label>
+        <label>Email2<input id="editEmail2"></label>
+        <label>Contact1<input id="editContact1"></label>
+        <label>Contact2<input id="editContact2"></label>
+        <label>Contact3<input id="editContact3"></label>
         <label>Website<input id="editWebsite"></label>
+        <label>Social Media<input id="editSocialMedia"></label>
+        <label>Notes<textarea id="editNotes"></textarea></label>
         <label>Address<textarea id="editAddress"></textarea></label>
         <label>Category<input id="editCategory"></label>
         <div class="dialog-actions">
           <button class="btn secondary" value="cancel" type="button" onclick="document.getElementById('editDialog').close()">Cancel</button>
           <button id="saveEditBtn" class="btn primary" value="default">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="eventDialog">
+      <form method="dialog" id="eventForm">
+        <h2>Create Event</h2>
+        <label>Event Name<input id="eventName" required placeholder="APAC Visit"></label>
+        <label>Date<input id="eventDate" type="date" required></label>
+        <label>Location<input id="eventLocation" placeholder="Singapore, Malaysia, Indonesia"></label>
+        <div class="dialog-actions">
+          <button class="btn secondary" value="cancel" type="button" onclick="document.getElementById('eventDialog').close()">Cancel</button>
+          <button id="saveEventBtn" class="btn primary" value="default">Create</button>
         </div>
       </form>
     </dialog>

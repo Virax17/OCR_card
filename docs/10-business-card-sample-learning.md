@@ -24,6 +24,42 @@ This means extraction should not treat every visible text line equally.
 
 ## Primary Extraction Rule
 
+Use a two-pass extraction method inside the single Gemini call:
+
+```text
+1. Transcribe all visible printed text from the front and back images.
+2. Sort only that transcribed text into the Excel fields.
+```
+
+The app saves the LLM transcript audit here:
+
+```text
+events/<event_id>/ocr/<card_id>_llm_transcript.txt
+```
+
+The audit file contains:
+
+```text
+front_text
+back_text
+all_visible_text
+field_evidence
+uncertain_fields
+```
+
+When a row is wrong, inspect this file first. If the text was read correctly but sorted into the wrong field, improve field rules. If the text was not transcribed correctly, improve image quality or Vision prompt examples.
+
+Post-processing now validates the LLM output against the transcript:
+
+```text
+Email1 / Email2 -> re-extracted from transcript using email patterns
+Website         -> re-extracted from printed URL/domain text
+Contact1-3      -> re-extracted from transcript phone lines and labels
+Name/Business/etc. -> removed if not supported by transcript text
+```
+
+The system should prefer blank cells over hallucinated cells.
+
 Use the front side as the primary source for:
 
 ```text
@@ -157,3 +193,93 @@ app/llm/gemini_client.py
 ```
 
 This keeps the app prompt and future MCP/agent usage aligned.
+
+## Supervised Excel Format
+
+The `Grid AI - Contacts.xlsx` workbook is the target output format. The app should export exactly these headers in sheet `contacts`:
+
+```text
+Date
+Name
+Designation
+Business
+Address
+City
+State
+Country
+Zip Code
+Website
+Category
+Social Media
+Notes
+Email1
+Email2
+Contact1
+Contact2
+Contact3
+Card
+```
+
+Learning from the workbook:
+
+```text
+Email1 = primary email
+Email2 = secondary email
+Contact1 = main direct/mobile number
+Contact2 = office/telephone/landline
+Contact3 = fax or another printed number
+Card = card image for verification
+```
+
+Contact columns should be digits only with country calling code included when visible or inferable:
+
+```text
++60 13-358 1918 -> 60133581918
++91 82919 71166 -> 918291971166
++62 21 2977 0999 -> 622129770999
+```
+
+Do not include plus signs, spaces, hyphens, or parentheses in `Contact1`, `Contact2`, or `Contact3`.
+
+If a contact already starts with the country code, do not add it again:
+
+```text
+60133581918 stays 60133581918
+not 6060133581918
+```
+
+## APAC Visit Image Set
+
+The `Madhav Tiwari-APAC Visit-20260701T113500Z-3-001` folder shows several recurring card patterns:
+
+```text
+front/back card pairs
+duplicate image copies
+logo-heavy company names
+business-outline backs
+product/service backs
+QR-code cards
+handwritten notes that should usually be ignored
+Indonesia/Malaysia/Singapore contact formats
+```
+
+The extraction prompt now prioritizes the front side for contact details and uses the back side mostly for address, service context, and category.
+
+## UI Workflow
+
+The app UI supports event-local scanning:
+
+```text
+1. Create or select an event.
+2. Upload front image and optional back image.
+3. Store the card under that event.
+4. Download that event's Excel file only.
+```
+
+The download button uses:
+
+```text
+GET /events/<event_id>/download
+```
+
+The resulting workbook uses sheet `contacts`, the 19 Grid AI headers, and embedded card images in the `Card` column.

@@ -74,6 +74,13 @@ class BusinessCardRecord(BaseModel):
     country: str | None = None
     zip_code: str | None = None
     category: str | None = None
+    social_media: str | None = None
+    notes: str | None = None
+    email1: str | None = None
+    email2: str | None = None
+    contact1: str | None = None
+    contact2: str | None = None
+    contact3: str | None = None
     confidence_score: Literal["High", "Medium", "Low"] = "Low"
     low_confidence_fields: list[str] = Field(default_factory=list)
     duplicate_flag: str = "No"
@@ -114,3 +121,10 @@ class UpdateRecordIn(BaseModel):
     country: str | None = None
     zip_code: str | None = None
     category: str | None = None
+    social_media: str | None = None
+    notes: str | None = None
+    email1: str | None = None
+    email2: str | None = None
+    contact1: str | None = None
+    contact2: str | None = None
+    contact3: str | None = None

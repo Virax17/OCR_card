@@ -13,12 +13,25 @@ from app.config import (
     DEFAULT_EVENT_ID,
     DEFAULT_EVENT_NAME,
     EVENTS_ROOT,
+    GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT,
+    GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT,
+    GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT,
+    GEMINI_PROJECT_COUNT,
     MAX_UPLOAD_BYTES,
 )
+from app.extraction.candidate_extractors import extract_candidates
 from app.imaging.preprocess import preprocess_image
-from app.llm.gemini_client import is_gemini_configured, structure_card_image
-from app.llm.usage_monitor import usage_snapshot
+from app.llm.gemini_client import (
+    gemini_key_labels,
+    is_gemini_configured,
+    structure_card_image,
+    structure_card_text,
+    structure_card_text_deterministic,
+)
+from app.llm.usage_monitor import provider_usage_snapshot, usage_snapshot
 from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, UpdateRecordIn
+from app.ocr.google_vision import extract_text as google_vision_extract_text
+from app.ocr.google_vision import is_google_vision_configured
 from app.storage.db import event_dir, initialize_event_database, new_id, utc_now
 from app.storage.excel_writer import export_records
 from app.storage.repositories import (
@@ -26,6 +39,8 @@ from app.storage.repositories import (
     ensure_event,
     find_duplicate_flag,
     get_event,
+    insert_field_candidates,
+    insert_ocr_result,
     insert_card_side,
     list_events,
     list_records,
@@ -66,8 +81,10 @@ async def index() -> FileResponse:
 async def health() -> dict:
     return {
         "status": "ok",
-        "processing_mode": "gemini_vision_once",
+        "processing_mode": "google_vision_ocr_gemini_text",
         "gemini_configured": is_gemini_configured(),
+        "gemini_key_count": len(gemini_key_labels()),
+        "google_vision_configured": is_google_vision_configured(),
         "storage_root": str(EVENTS_ROOT),
         "default_event_id": DEFAULT_EVENT_ID,
     }
@@ -109,6 +126,46 @@ def save_side_file(event_id: str, card_id: str, side: str, upload: UploadFile, i
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(image_bytes)
     return filename
+
+
+def save_llm_audit(event_id: str, card_id: str, fields: dict) -> None:
+    audit_path = event_dir(EVENTS_ROOT, event_id) / "ocr" / f"{card_id}_llm_transcript.txt"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence = fields.get("field_evidence")
+    uncertain = fields.get("uncertain_fields")
+    sections = [
+        "FRONT TEXT",
+        str(fields.get("front_text") or ""),
+        "",
+        "BACK TEXT",
+        str(fields.get("back_text") or ""),
+        "",
+        "ALL VISIBLE TEXT",
+        str(fields.get("all_visible_text") or ""),
+        "",
+        "FIELD EVIDENCE",
+        json_dumps_pretty(evidence),
+        "",
+        "UNCERTAIN FIELDS",
+        json_dumps_pretty(uncertain),
+    ]
+    audit_path.write_text("\n".join(sections), encoding="utf-8")
+
+
+def save_ocr_audit(event_id: str, card_id: str, ocr_results: list) -> None:
+    audit_path = event_dir(EVENTS_ROOT, event_id) / "ocr" / f"{card_id}_google_vision_ocr.json"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = [
+        result.model_dump() if hasattr(result, "model_dump") else result.dict()
+        for result in ocr_results
+    ]
+    audit_path.write_text(json_dumps_pretty(payload), encoding="utf-8")
+
+
+def json_dumps_pretty(value) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, indent=2) if value is not None else ""
 
 
 def clear_event_artifacts(event_id: str) -> dict[str, int]:
@@ -155,13 +212,13 @@ def record_from_llm_fields(
         designation=fields.get("designation"),
         company=fields.get("company") or fields.get("business"),
         business=fields.get("business") or fields.get("company"),
-        phone_primary=fields.get("phone_primary"),
-        phone_number=fields.get("phone_number"),
-        mobile_number=fields.get("mobile_number"),
+        phone_primary=fields.get("phone_primary") or (f"+{fields.get('contact1')}" if fields.get("contact1") else None),
+        phone_number=fields.get("phone_number") or fields.get("contact2"),
+        mobile_number=fields.get("mobile_number") or fields.get("contact1"),
         phone_extra=fields.get("phone_extra"),
-        fax_number=fields.get("fax_number"),
+        fax_number=fields.get("fax_number") or fields.get("contact3"),
         country_code=fields.get("country_code"),
-        email=fields.get("email"),
+        email=fields.get("email") or fields.get("email1"),
         website=fields.get("website"),
         address=fields.get("address"),
         city=fields.get("city"),
@@ -169,6 +226,13 @@ def record_from_llm_fields(
         country=fields.get("country"),
         zip_code=fields.get("zip_code"),
         category=fields.get("category"),
+        social_media=fields.get("social_media"),
+        notes=fields.get("notes"),
+        email1=fields.get("email1") or fields.get("email"),
+        email2=fields.get("email2"),
+        contact1=fields.get("contact1"),
+        contact2=fields.get("contact2"),
+        contact3=fields.get("contact3"),
         confidence_score=confidence,
         low_confidence_fields=low_confidence_fields,
         front_image_filename=front_image_filename,
@@ -182,8 +246,10 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         raise HTTPException(status_code=404, detail="Event not found")
     if not is_gemini_configured():
         raise HTTPException(status_code=503, detail="Gemini is not configured")
+    if not is_google_vision_configured():
+        raise HTTPException(status_code=503, detail="Google Vision OCR is not configured")
 
-    card_id = create_card(event_id, processing_mode="gemini_vision_once")
+    card_id = create_card(event_id, processing_mode="google_vision_ocr_gemini_text")
     front_filename = save_side_file(event_id, card_id, "front", front_upload, front_bytes)
     back_filename = save_side_file(event_id, card_id, "back", back_upload, back_bytes) if back_upload and back_bytes else None
 
@@ -206,15 +272,39 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
                 quality_warnings=warnings,
             )
 
-        fields = structure_card_image(
+        ocr_results = [google_vision_extract_text(front_bytes, "front", event_id=event_id)]
+        if back_upload and back_bytes:
+            ocr_results.append(google_vision_extract_text(back_bytes, "back", event_id=event_id))
+        for result in ocr_results:
+            insert_ocr_result(event_id, card_id, result)
+        save_ocr_audit(event_id, card_id, ocr_results)
+
+        front_ocr = next((result.raw_text for result in ocr_results if result.side == "front"), "")
+        back_ocr = next((result.raw_text for result in ocr_results if result.side == "back"), None)
+        if not front_ocr.strip() and not (back_ocr or "").strip():
+            errors = "; ".join(result.error_message or "No text detected" for result in ocr_results)
+            raise RuntimeError(f"Google Vision OCR did not return text: {errors}")
+
+        candidates = extract_candidates(ocr_results)
+        insert_field_candidates(event_id, card_id, candidates)
+        candidate_hints = [
+            candidate.model_dump() if hasattr(candidate, "model_dump") else candidate.dict()
+            for candidate in candidates
+        ]
+        deterministic_fields = structure_card_text_deterministic(
+            front_text=front_ocr,
+            back_text=back_ocr,
+            candidate_hints=candidate_hints,
+        )
+        fields = structure_card_text(
             event_id=event_id,
-            front_image=front_bytes,
-            front_mime_type=front_upload.content_type or "image/jpeg",
-            back_image=back_bytes,
-            back_mime_type=back_upload.content_type if back_upload else None,
+            front_text=front_ocr,
+            back_text=back_ocr,
+            candidate_hints=candidate_hints,
         )
         if not fields:
-            raise RuntimeError("Gemini Vision did not return structured fields")
+            fields = deterministic_fields
+        save_llm_audit(event_id, card_id, fields)
         draft = record_from_llm_fields(
             event_id=event_id,
             event_name=event.name,
@@ -278,6 +368,33 @@ async def vision_scan(
     return {"event_id": event_id, "fields": fields}
 
 
+@app.post("/events/{event_id}/ocr-scan")
+async def ocr_scan(
+    event_id: str,
+    front: UploadFile = File(...),
+    back: UploadFile | None = File(default=None),
+) -> dict:
+    if not get_event(event_id):
+        raise HTTPException(status_code=404, detail="Event not found")
+    if not is_google_vision_configured():
+        raise HTTPException(status_code=503, detail="Google Vision OCR is not configured")
+    front_bytes = await read_upload(front)
+    back_bytes = await read_upload(back)
+    if front_bytes is None:
+        raise HTTPException(status_code=400, detail="Front image is required")
+    results = [google_vision_extract_text(front_bytes, "front", event_id=event_id)]
+    if back_bytes:
+        results.append(google_vision_extract_text(back_bytes, "back", event_id=event_id))
+    return {
+        "event_id": event_id,
+        "ocr_engine": "google_vision",
+        "results": [
+            result.model_dump() if hasattr(result, "model_dump") else result.dict()
+            for result in results
+        ],
+    }
+
+
 @app.get("/events/{event_id}/cards")
 async def records(event_id: str) -> dict:
     return {"event_id": event_id, "records": list_records(event_id)}
@@ -301,9 +418,11 @@ async def reset_cards(event_id: str) -> dict:
 
 def usage_response() -> dict:
     snapshot = usage_snapshot()
+    gemini = provider_usage_snapshot("gemini")
+    vision = provider_usage_snapshot("google_vision")
     return {
         "scope": "global",
-        "provider": "gemini",
+        "provider": "multi",
         "daily_requests": snapshot.daily_requests,
         "minute_requests": snapshot.minute_requests,
         "daily_tokens_estimated": snapshot.daily_tokens,
@@ -311,7 +430,29 @@ def usage_response() -> dict:
         "minute_request_limit": snapshot.minute_request_limit,
         "daily_token_limit": snapshot.daily_token_limit,
         "allowed": snapshot.allowed,
-        "note": "Local app-side monitor only. Check Google AI Studio for authoritative project quota.",
+        "gemini": {
+            "daily_requests": gemini.daily_requests,
+            "minute_requests": gemini.minute_requests,
+            "daily_tokens_estimated": gemini.daily_tokens,
+            "daily_request_limit": gemini.daily_request_limit,
+            "minute_request_limit": gemini.minute_request_limit,
+            "daily_token_limit": gemini.daily_token_limit,
+            "key_count": len(gemini_key_labels()),
+            "project_count": GEMINI_PROJECT_COUNT,
+            "daily_request_limit_per_project": GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT,
+            "minute_request_limit_per_project": GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT,
+            "daily_token_limit_per_project": GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT,
+            "by_key": gemini.by_key or {},
+        },
+        "google_vision": {
+            "daily_requests": vision.daily_requests,
+            "minute_requests": vision.minute_requests,
+            "monthly_units": vision.monthly_units,
+            "minute_request_limit": vision.minute_request_limit,
+            "free_units_monthly": vision.free_units_monthly,
+            "estimated_cost_usd": vision.estimated_cost_usd,
+        },
+        "note": "Local app-side monitor only. Gemini active limits/credit are in Google AI Studio; Google Vision quota/billing are in Google Cloud Console.",
     }
 
 

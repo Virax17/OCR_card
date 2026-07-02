@@ -123,6 +123,13 @@ CREATE TABLE IF NOT EXISTS card_records (
     country TEXT,
     zip_code TEXT,
     category TEXT,
+    social_media TEXT,
+    notes TEXT,
+    email1 TEXT,
+    email2 TEXT,
+    contact1 TEXT,
+    contact2 TEXT,
+    contact3 TEXT,
     confidence_score TEXT,
     low_confidence_fields TEXT,
     duplicate_flag TEXT NOT NULL DEFAULT 'No',
@@ -232,6 +239,13 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "card_records", "phone_number", "TEXT")
     _ensure_column(conn, "card_records", "mobile_number", "TEXT")
     _ensure_column(conn, "card_records", "fax_number", "TEXT")
+    _ensure_column(conn, "card_records", "social_media", "TEXT")
+    _ensure_column(conn, "card_records", "notes", "TEXT")
+    _ensure_column(conn, "card_records", "email1", "TEXT")
+    _ensure_column(conn, "card_records", "email2", "TEXT")
+    _ensure_column(conn, "card_records", "contact1", "TEXT")
+    _ensure_column(conn, "card_records", "contact2", "TEXT")
+    _ensure_column(conn, "card_records", "contact3", "TEXT")
     _ensure_column(conn, "ocr_results", "variant", "TEXT")
     _ensure_column(conn, "ocr_results", "runtime_ms", "INTEGER")
     _ensure_column(conn, "ocr_results", "status", "TEXT NOT NULL DEFAULT 'ok'")
@@ -239,6 +253,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "ocr_blocks", "engine", "TEXT")
     _ensure_column(conn, "ocr_blocks", "variant", "TEXT")
     _ensure_column(conn, "ocr_blocks", "normalized_text", "TEXT")
+    _ensure_column(conn, "llm_usage", "key_label", "TEXT")
+    _ensure_column(conn, "llm_usage", "unit_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "llm_usage", "cost_estimate_usd", "REAL NOT NULL DEFAULT 0")
     conn.execute(
         """
         INSERT OR IGNORE INTO schema_migrations (version, applied_at)

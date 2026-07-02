@@ -6,33 +6,54 @@ Related: [[02-llm-minimized-extraction-design]]
 
 ## What Was Set Up
 
-- `.env` stores the Gemini API key locally.
+- `.env` stores Gemini API keys locally.
 - `.env.example` documents required Gemini settings without secrets.
 - `.agents/mcp_gemini_config.json` is an MCP-style config reference that points tools/agents to environment variables.
 - `app/llm/gemini_client.py` wraps Gemini calls.
 - `app/llm/usage_monitor.py` records local Gemini usage into SQLite.
-- SQLite table `llm_usage` stores requests, estimated tokens, status, and errors.
+- SQLite table `llm_usage` stores requests, estimated tokens, provider, key label, OCR units, local cost estimate, status, and errors.
 
 ## Important
 
 The local monitor tracks usage made by this app only. Google says Gemini API rate limits are project-level and can vary by model/tier, so authoritative usage and active limits must still be checked in Google AI Studio.
+
+Multiple Gemini API keys can be configured, but Gemini API rate limits are project-level, not API-key-level. If two keys belong to the same Google AI project, the second key does not increase true quota. The app can rotate to another key when a key/project returns a quota error, and it records requests by non-secret key label.
 
 Official docs:
 
 - Rate limits: https://ai.google.dev/gemini-api/docs/rate-limits
 - Pricing: https://ai.google.dev/gemini-api/docs/pricing
 
+Reset timing:
+
+- Gemini RPD resets at midnight Pacific time.
+- Google documents RPM, TPM, and RPD as project-level limits.
+- Active limits must be checked in Google AI Studio because model/tier limits can change.
+
 ## Local Limits
 
 Configured in `.env`:
 
 ```text
-GEMINI_DAILY_REQUEST_LIMIT=50
-GEMINI_MINUTE_REQUEST_LIMIT=10
-GEMINI_DAILY_TOKEN_LIMIT=100000
+GEMINI_API_KEY=...
+GEMINI_API_KEY_2=...
+GEMINI_API_KEY_3=...
+GEMINI_PROJECT_COUNT=3
+GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT=20
+GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT=5
+GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT=250000
 ```
 
 These are soft app-side guardrails, not Google-enforced quotas.
+
+For three separate Google AI Studio projects with the active Gemini 2.5 Flash limits shown in AI Studio:
+
+```text
+Per project: 20 RPD, 5 RPM, 250K TPM
+Combined local estimate: 60 Gemini-sorted cards/day, 15 requests/minute, 750K tokens/minute
+```
+
+The normal upload path uses one Gemini text-sorting request per card after Google Vision OCR. Therefore the practical Gemini-limited estimate is about 60 cards per Pacific-day reset window if each of the three projects has 20 RPD available. Google Vision has its own OCR quota and is tracked separately.
 
 ## Business Category Taxonomy
 
@@ -55,14 +76,33 @@ Other
 ## API Endpoints
 
 ```text
+GET /events
+POST /events
 GET /events/{event_id}/llm-usage
 GET /llm-usage
+GET /events/{event_id}/download
 POST /events/{event_id}/vision-scan
 ```
 
-Returns local Gemini usage counters. Because one Gemini API key is shared by the whole app, `/llm-usage` is the standard global usage endpoint and aggregates usage across event databases. The event-scoped URL is kept for compatibility but returns the same global counters.
+Returns local Gemini and Google Vision usage counters. `/llm-usage` is the standard global usage endpoint and aggregates usage across event databases. The event-scoped URL is kept for compatibility but returns the same global counters.
+
+The usage response includes:
+
+```text
+gemini.daily_requests
+gemini.minute_requests
+gemini.daily_tokens_estimated
+gemini.project_count
+gemini.daily_request_limit_per_project
+gemini.by_key
+google_vision.daily_requests
+google_vision.monthly_units
+google_vision.estimated_cost_usd
+```
 
 `POST /events/{event_id}/vision-scan` accepts `front` and optional `back` image files. It sends images directly to Gemini Vision and returns structured JSON without storing a new card record.
+
+`POST /events` creates a new event folder and SQLite database if needed. `GET /events/{event_id}/download` exports only the records from that selected event into the Grid AI `contacts` workbook format.
 
 ## Direct Image Scan Test
 
@@ -100,13 +140,15 @@ phone_primary -> normalized international number for duplicate matching
 
 ## App Fallback Behavior
 
-The normal upload flow is now LLM-only:
+The normal upload flow is now OCR-first:
 
 ```text
 Upload card:
-  send front image and optional back image together
-  call Gemini Vision once
-  store returned structured JSON
+  send front image and optional back image to Google Vision OCR
+  store OCR text
+  extract deterministic field candidates
+  call Gemini text sorter when quota allows
+  fall back to OCR-only extraction if Gemini is unavailable or quota-limited
 ```
 
-This avoids local OCR failures on heavy design elements, unusual fonts, vertical text, glossy photos, or busy backgrounds. It also keeps API usage predictable: one Gemini request per processed card.
+This avoids blank Excel rows when Gemini is quota-limited. New rows still get OCR-derived email, phone, country, website, and best-effort name/business/address fields.

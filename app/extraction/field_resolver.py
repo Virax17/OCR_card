@@ -20,31 +20,56 @@ def normalize_email(value: str | None) -> str | None:
 
 
 COUNTRY_HINTS = [
-    ("IN", "+91", ["india", "bharat", "maharashtra", "gujarat", "mumbai", "pune", "delhi", "chennai", "kolkata", "bengaluru", "bangalore"]),
-    ("ID", "+62", ["indonesia", "jakarta", "balikpapan", "kalimantan", "papua", "sorong"]),
-    ("AE", "+971", ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah"]),
-    ("SA", "+966", ["saudi", "ksa", "riyadh", "jeddah", "dammam"]),
-    ("QA", "+974", ["qatar", "doha"]),
-    ("OM", "+968", ["oman", "muscat"]),
-    ("KW", "+965", ["kuwait"]),
-    ("BH", "+973", ["bahrain"]),
-    ("US", "+1", ["usa", "united states", "america", "california", "texas", "new york"]),
-    ("GB", "+44", ["uk", "united kingdom", "england", "london"]),
-    ("SG", "+65", ["singapore"]),
-    ("MY", "+60", ["malaysia", "kuala lumpur"]),
+    ("India", "IN", "+91", ["india", "bharat", "maharashtra", "gujarat", "mumbai", "pune", "delhi", "chennai", "kolkata", "bengaluru", "bangalore"]),
+    ("Indonesia", "ID", "+62", ["indonesia", "jakarta", "balikpapan", "kalimantan", "papua", "sorong", "bekasi", "banten", "cilegon", "gresik", "cikarang"]),
+    ("United Arab Emirates", "AE", "+971", ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah"]),
+    ("Saudi Arabia", "SA", "+966", ["saudi", "ksa", "riyadh", "jeddah", "dammam"]),
+    ("Qatar", "QA", "+974", ["qatar", "doha"]),
+    ("Oman", "OM", "+968", ["oman", "muscat"]),
+    ("Kuwait", "KW", "+965", ["kuwait"]),
+    ("Bahrain", "BH", "+973", ["bahrain"]),
+    ("United States", "US", "+1", ["usa", "united states", "america", "california", "texas", "new york"]),
+    ("United Kingdom", "GB", "+44", ["uk", "united kingdom", "england", "london"]),
+    ("Singapore", "SG", "+65", ["singapore"]),
+    ("Malaysia", "MY", "+60", ["malaysia", "kuala lumpur"]),
 ]
 
 
 def infer_country_and_code(*values: str | None) -> tuple[str, str]:
     text = " ".join(value or "" for value in values).lower()
-    for country, dial_code, hints in COUNTRY_HINTS:
+    for country, _, dial_code, hints in COUNTRY_HINTS:
         if any(hint in text for hint in hints):
             return country, dial_code
     default = DEFAULT_COUNTRY.upper()
-    for country, dial_code, _ in COUNTRY_HINTS:
-        if country == default:
+    for country, iso_code, dial_code, _ in COUNTRY_HINTS:
+        if iso_code == default or country.upper() == default:
             return country, dial_code
-    return default, "+91"
+    return "India", "+91"
+
+
+def country_name_from_code(country_code: str | None) -> str | None:
+    if not country_code:
+        return None
+    code_digits = re.sub(r"\D", "", country_code)
+    if not code_digits:
+        return None
+    for country, _, dial_code, _ in COUNTRY_HINTS:
+        if code_digits == re.sub(r"\D", "", dial_code):
+            return country
+    return None
+
+
+def normalize_country_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    normalized_key = normalized.lower()
+    for country, iso_code, _, hints in COUNTRY_HINTS:
+        if normalized_key in {country.lower(), iso_code.lower()} or normalized_key in hints:
+            return country
+    return normalized
 
 
 def normalize_phone(value: str | None, country_code: str | None = None) -> str | None:

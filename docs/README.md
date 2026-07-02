@@ -1,14 +1,14 @@
 # Business Card LLM Scanner Docs
 
-Status: Review draft  
-Last updated: 2026-07-01  
+Status: Active implementation notes  
+Last updated: 2026-07-02  
 Owner: Tritorc OCR project
 
 ## Purpose
 
-This folder is the Obsidian-friendly planning space for the business card scanner.
+This folder is the Obsidian-friendly planning and implementation space for the business card scanner.
 
-The current product goal is to scan one-sided or two-sided business cards, extract contact details accurately with one Gemini Vision call per card, and store the result in an Excel-compatible tabular structure.
+The current product goal is to scan one-sided or two-sided business cards, extract contact details accurately with Google Vision OCR plus Gemini text sorting, store the result in SQLite, and export event-wise Excel files with card images for verification.
 
 ## Current Planning Docs
 
@@ -22,14 +22,21 @@ The current product goal is to scan one-sided or two-sided business cards, extra
 - [[08-gemini-mcp-usage]]
 - [[09-ocr-ensemble-plan]]
 - [[10-business-card-sample-learning]]
+- [[11-google-vision-ocr-runtime]]
 
-## Review Rule
+## Runtime Summary
 
-No code implementation should start until the implementation plan is reviewed and approved.
+```text
+Google Vision OCR -> deterministic candidates -> Gemini text sorter -> SQLite -> Excel
+```
+
+Gemini is used once per card in the normal upload flow. Google Vision OCR is counted once per uploaded image side.
 
 ## External References
 
 - PaddleOCR GitHub: https://github.com/PaddlePaddle/PaddleOCR
+- Gemini API rate limits: https://ai.google.dev/gemini-api/docs/rate-limits
+- Google Vision OCR docs: https://cloud.google.com/vision/docs/ocr
 - PaddleOCR notes used for planning:
   - PaddleOCR supports image and document OCR with structured JSON/Markdown-style outputs.
   - PaddleOCR positions PP-OCR as scene OCR for text spotting and recognition.

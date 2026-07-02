@@ -5,11 +5,30 @@ Last updated: 2026-07-01
 
 ## Decisions
 
+### 2026-07-01: Use Google Vision OCR Before Gemini Text Sorting
+
+Decision:
+
+Use Google Cloud Vision `DOCUMENT_TEXT_DETECTION` as the image-to-text layer. The app sends the front image and optional back image to Google Vision OCR, stores raw OCR output in SQLite and JSON audit files, extracts deterministic candidates, then sends only OCR text plus candidate hints to Gemini for field sorting.
+
+Reason:
+
+The Gemini-image-only path hallucinated business/company names, websites, emails, and country codes when card designs were stylized or visually busy. A dedicated OCR service gives a concrete transcript first, making the LLM a sorter instead of a visual guesser.
+
+Impact:
+
+- Normal upload mode is now `google_vision_ocr_gemini_text`.
+- Google Vision service-account credentials are loaded from `GOOGLE_APPLICATION_CREDENTIALS`.
+- Raw OCR is stored under `events/<event_id>/ocr/<card_id>_google_vision_ocr.json`.
+- Gemini receives `front_text`, `back_text`, and rule-based candidate hints.
+- Unsupported LLM values are still dropped if they are not present in OCR text.
+- `/events/{event_id}/ocr-scan` can be used to debug OCR output without storing a card record.
+
 ### 2026-07-01: Use One Gemini Vision Call As Main Processing Path
 
 Decision:
 
-Use Gemini Vision once per card upload. Send the front image and optional back image together and store the structured response.
+Superseded. Earlier runtime used Gemini Vision once per card upload. It sent the front image and optional back image together and stored the structured response.
 
 Reason:
 
@@ -22,6 +41,7 @@ Impact:
 - SQLite remains the source of truth.
 - Excel export still embeds front/back card images for manual verification.
 - Local OCR modules may remain as historical reference, but they are not part of the runtime path.
+- Superseded by the Google Vision OCR plus Gemini text sorting path above.
 
 ### 2026-07-01: Use PaddleOCR As Primary OCR Engine
 

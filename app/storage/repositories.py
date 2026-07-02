@@ -161,11 +161,11 @@ def upsert_card_record(record: BusinessCardRecord) -> None:
             INSERT INTO card_records (
                 record_id, card_id, event_id, name, designation, company, business, phone_primary, phone_number,
                 mobile_number, phone_extra, fax_number, country_code, email, website, address, city, state, country,
-                zip_code, category, confidence_score,
+                zip_code, category, social_media, notes, email1, email2, contact1, contact2, contact3, confidence_score,
                 low_confidence_fields, duplicate_flag, front_image_filename, back_image_filename,
                 reviewed_by_user, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(card_id) DO UPDATE SET
                 name = excluded.name,
                 designation = excluded.designation,
@@ -185,6 +185,13 @@ def upsert_card_record(record: BusinessCardRecord) -> None:
                 country = excluded.country,
                 zip_code = excluded.zip_code,
                 category = excluded.category,
+                social_media = excluded.social_media,
+                notes = excluded.notes,
+                email1 = excluded.email1,
+                email2 = excluded.email2,
+                contact1 = excluded.contact1,
+                contact2 = excluded.contact2,
+                contact3 = excluded.contact3,
                 confidence_score = excluded.confidence_score,
                 low_confidence_fields = excluded.low_confidence_fields,
                 duplicate_flag = excluded.duplicate_flag,
@@ -215,6 +222,13 @@ def upsert_card_record(record: BusinessCardRecord) -> None:
                 record.country,
                 record.zip_code,
                 record.category,
+                record.social_media,
+                record.notes,
+                record.email1,
+                record.email2,
+                record.contact1,
+                record.contact2,
+                record.contact3,
                 record.confidence_score,
                 ", ".join(record.low_confidence_fields),
                 record.duplicate_flag,
@@ -283,6 +297,13 @@ def update_record(event_id: str, card_id: str, values: dict[str, Any]) -> Busine
         "country",
         "zip_code",
         "category",
+        "social_media",
+        "notes",
+        "email1",
+        "email2",
+        "contact1",
+        "contact2",
+        "contact3",
     }
     updates = {key: value for key, value in values.items() if key in allowed}
     if not updates:

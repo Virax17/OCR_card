@@ -17,6 +17,17 @@ def test_email_domain_is_not_promoted_to_website() -> None:
     assert [candidate.value for candidate in candidates if candidate.field == "website"] == []
 
 
+def test_email_local_part_is_not_promoted_to_website_candidate() -> None:
+    candidates = extract_candidates([make_result("E Ahmad.Ajitama@petrosea.com")])
+    assert [candidate.value for candidate in candidates if candidate.field == "email"] == ["Ahmad.Ajitama@petrosea.com"]
+    assert [candidate.value for candidate in candidates if candidate.field == "website"] == []
+
+
+def test_spaced_ocr_email_is_extracted() -> None:
+    candidates = extract_candidates([make_result("E info @ tritorc . com")])
+    assert [candidate.value for candidate in candidates if candidate.field == "email"] == ["info@tritorc.com"]
+
+
 def test_resolves_core_business_card_fields() -> None:
     result = make_result("John Smith\nCEO Example Pvt Ltd\njohn@example.com +91 9876543210\nwww.example.com")
     candidates = extract_candidates([result])
@@ -68,7 +79,7 @@ def test_address_country_hint_sets_phone_country_code() -> None:
         ocr_results=[result],
         candidates=candidates,
     )
-    assert record.country == "AE"
+    assert record.country == "United Arab Emirates"
     assert record.country_code == "+971"
     assert record.phone_primary == "+971501234567"
     assert record.phone_number == "501234567"
@@ -100,7 +111,7 @@ def test_labeled_phone_mobile_and_fax_are_separated() -> None:
         ocr_results=[result],
         candidates=candidates,
     )
-    assert record.country == "ID"
+    assert record.country == "Indonesia"
     assert record.country_code == "+62"
     assert record.phone_primary == "+6281236678953"
     assert record.phone_number == "2129770999"

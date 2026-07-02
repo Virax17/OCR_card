@@ -5,12 +5,13 @@ import re
 from app.models import FieldCandidate, OCRSideResult
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+EMAIL_JOINER_RE = re.compile(r"\s*([@._+-])\s*")
 PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{7,}\d)")
 LABELED_PHONE_RE = re.compile(
     r"^\s*(?P<label>T|TEL|TELEPHONE|PHONE|OFFICE|LANDLINE|M|MOB|MOBILE|CELL|F|FAX)\s*[:\-]?\s*(?P<number>\+?\d[\d\s().-]{6,}\d)\s*$",
     re.I,
 )
-WEBSITE_RE = re.compile(r"\b(?:https?://)?(?:www\.)?[A-Z0-9-]+(?:\.[A-Z0-9-]+)+(?:/\S*)?\b", re.I)
+WEBSITE_RE = re.compile(r"\b(?:https?://)?(?:www\.)?[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,}(?:/\S*)?\b", re.I)
 
 TITLE_KEYWORDS = {
     "founder",
@@ -28,6 +29,9 @@ TITLE_KEYWORDS = {
     "vp",
     "president",
     "executive",
+    "officer",
+    "marketing",
+    "procurement",
 }
 COMPANY_KEYWORDS = {
     "pvt",
@@ -63,6 +67,16 @@ def clean_line(line: str) -> str:
     return re.sub(r"\s+", " ", line).strip(" \t|,:;")
 
 
+def email_search_text(text: str) -> str:
+    normalized_lines = []
+    for line in text.splitlines():
+        line = line.replace("＠", "@")
+        line = re.sub(r"\s*[\[(]?\s*at\s*[\])]?\s*", "@", line, flags=re.I)
+        line = re.sub(r"\s*[\[(]?\s*dot\s*[\])]?\s*", ".", line, flags=re.I)
+        normalized_lines.append(EMAIL_JOINER_RE.sub(r"\1", line))
+    return "\n".join(normalized_lines)
+
+
 def _candidate(field: str, value: str, confidence: float, source: str, evidence: str | None = None) -> FieldCandidate:
     return FieldCandidate(field=field, value=clean_line(value), confidence=confidence, source=source, evidence=evidence)
 
@@ -86,13 +100,15 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
                 all_lines.append((line, result.side, block.confidence, block.line_index))
 
     joined = "\n".join(line for line, _, _, _ in all_lines)
-    emails = sorted(set(EMAIL_RE.findall(joined)))
+    emails = sorted(set(EMAIL_RE.findall(joined) + EMAIL_RE.findall(email_search_text(joined))))
     email_domains = {email.split("@", 1)[1].lower() for email in emails if "@" in email}
     for email in emails:
         candidates.append(_candidate("email", email, 0.95, "rule", "email_regex"))
 
     labeled_numbers: set[str] = set()
     for line, side, confidence, _ in all_lines:
+        if re.search(r"\b(iso|asme|certified|ohsas|sk3|lrga|wqa|ykan|htri)\b", line.lower()):
+            continue
         match = LABELED_PHONE_RE.match(line)
         if not match:
             continue
@@ -112,10 +128,20 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
 
     for phone in sorted(set(PHONE_RE.findall(joined))):
         digits = re.sub(r"\D", "", phone)
+        line_start = joined.rfind("\n", 0, joined.find(phone)) + 1
+        line_end = joined.find("\n", joined.find(phone))
+        line = joined[line_start: line_end if line_end != -1 else len(joined)]
+        if re.search(r"\b(iso|asme|certified|ohsas|sk3|lrga|wqa|ykan|htri)\b", line.lower()):
+            continue
         if 8 <= len(digits) <= 15 and digits not in labeled_numbers:
             candidates.append(_candidate("phone", phone, 0.85, "rule", "phone_regex"))
     for website in sorted(set(WEBSITE_RE.findall(joined))):
         if "@" in website or website.lower().endswith((".jpg", ".png")):
+            continue
+        start = joined.find(website)
+        if start > 0 and joined[start - 1] == "@":
+            continue
+        if start >= 0 and start + len(website) < len(joined) and joined[start + len(website)] == "@":
             continue
         lower_site = website.lower()
         normalized_site = re.sub(r"^https?://", "", lower_site).removeprefix("www.").strip("/")
@@ -132,12 +158,15 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
             candidates.append(_candidate("designation", line, max(confidence, 0.72), side, "title_keyword"))
         if any(keyword in lower for keyword in COMPANY_KEYWORDS):
             candidates.append(_candidate("company", line, max(confidence, 0.72), side, "company_keyword"))
+        if side == "front" and line_index <= 4 and re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower):
+            candidates.append(_candidate("company", line, max(confidence, 0.82), side, "top_front_company"))
         if any(keyword in lower for keyword in ADDRESS_KEYWORDS):
             candidates.append(_candidate("address", line, max(confidence, 0.68), side, "address_keyword"))
         if (
             side == "front"
             and line_index <= 4
             and 1 < len(line.split()) <= 4
+            and not re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower)
             and not EMAIL_RE.search(line)
             and not PHONE_RE.search(line)
             and not WEBSITE_RE.search(line)

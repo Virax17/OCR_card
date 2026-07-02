@@ -3,19 +3,68 @@
   "description": "Local Gemini API configuration for the OCR app. The API key is loaded from GEMINI_API_KEY in .env; do not hardcode secrets here.",
   "env": {
     "GEMINI_API_KEY": "${GEMINI_API_KEY}",
+    "GEMINI_API_KEY_2": "${GEMINI_API_KEY_2}",
+    "GEMINI_API_KEYS": "${GEMINI_API_KEYS}",
     "GEMINI_MODEL": "${GEMINI_MODEL}",
     "GEMINI_DAILY_REQUEST_LIMIT": "${GEMINI_DAILY_REQUEST_LIMIT}",
     "GEMINI_MINUTE_REQUEST_LIMIT": "${GEMINI_MINUTE_REQUEST_LIMIT}",
-    "GEMINI_DAILY_TOKEN_LIMIT": "${GEMINI_DAILY_TOKEN_LIMIT}"
+    "GEMINI_DAILY_TOKEN_LIMIT": "${GEMINI_DAILY_TOKEN_LIMIT}",
+    "GOOGLE_APPLICATION_CREDENTIALS": "${GOOGLE_APPLICATION_CREDENTIALS}",
+    "GOOGLE_VISION_MODEL": "${GOOGLE_VISION_MODEL}",
+    "GOOGLE_VISION_MINUTE_REQUEST_LIMIT": "${GOOGLE_VISION_MINUTE_REQUEST_LIMIT}",
+    "GOOGLE_VISION_FREE_UNITS_MONTHLY": "${GOOGLE_VISION_FREE_UNITS_MONTHLY}",
+    "GOOGLE_VISION_PRICE_PER_1000": "${GOOGLE_VISION_PRICE_PER_1000}"
   },
   "notes": [
     "This is an MCP-style local config reference for agents/tools.",
-    "Actual OCR app usage is implemented in app/llm/.",
+    "Actual OCR app usage is implemented in app/ocr/ and app/llm/.",
+    "Normal uploads use Google Vision OCR first, then Gemini text-only sorting.",
+    "Multiple Gemini API keys can be configured, but Gemini API rate limits are project-level, not key-level.",
+    "The app tracks local Google Vision OCR units and estimated cost; authoritative billing lives in Google Cloud Console.",
     "Use Google AI Studio to view authoritative project-level rate limits and quota."
   ],
   "business_card_extraction_guidance": {
     "source_samples": "D:/tritorc/ocr/data",
+    "supervised_reference": {
+      "image_folder": "D:/tritorc/ocr/data/Madhav Tiwari-APAC Visit-20260701T113500Z-3-001",
+      "target_workbook": "D:/tritorc/ocr/data/Grid AI - Contacts.xlsx",
+      "sheet": "contacts",
+      "excel_headers": [
+        "Date",
+        "Name",
+        "Designation",
+        "Business",
+        "Address",
+        "City",
+        "State",
+        "Country",
+        "Zip Code",
+        "Website",
+        "Category",
+        "Social Media",
+        "Notes",
+        "Email1",
+        "Email2",
+        "Contact1",
+        "Contact2",
+        "Contact3",
+        "Card"
+      ]
+    },
     "front_side_priority": "Use the front side as the primary source for person name, designation, company/business, email, website, and direct contact numbers.",
+    "runtime_pipeline": [
+      "Google Vision DOCUMENT_TEXT_DETECTION extracts OCR text from the front and optional back image.",
+      "The app stores raw OCR results before calling Gemini.",
+      "Gemini receives OCR text and rule-based candidate hints only during normal upload processing.",
+      "Gemini must sort the OCR transcript into Excel fields; it must not invent values missing from OCR text."
+    ],
+    "text_sorting": [
+      "Preserve front_text, back_text, and all_visible_text exactly from OCR input.",
+      "Map fields only from that OCR transcript.",
+      "Return field_evidence and uncertain_fields for audit.",
+      "If a field cannot be supported by an OCR line, return null instead of guessing.",
+      "Prefer blank/null over a guessed value. Accuracy is more important than filling every cell."
+    ],
     "company_detection": [
       "The company/business name is usually the top-most stylized logo or brand text on the front side.",
       "The logo may be top-left or top-right and may be graphic/stylized rather than normal OCR body text.",
@@ -30,17 +79,22 @@
       "Ignore QR codes, decorative icons, certification icons, product photos, separators, and handwritten notes unless printed text beside them is a contact field."
     ],
     "contact_labels": {
-      "phone_number": ["T", "Tel", "Telp", "Phone", "Office", "Landline"],
-      "mobile_number": ["M", "Mob", "Mobile", "HP", "Cell"],
-      "fax_number": ["F", "Fax"],
-      "email": ["E", "Email", "Mail", "Envelope icon"],
+      "contact1": ["M", "Mob", "Mobile", "HP", "Cell", "Direct"],
+      "contact2": ["T", "Tel", "Telp", "Phone", "Office", "Landline"],
+      "contact3": ["F", "Fax", "Alternate printed phone"],
+      "email1": ["E", "Email", "Mail", "Envelope icon"],
+      "email2": ["Secondary email"],
       "website": ["W", "Web", "Website", "Globe icon", "Footer domain"]
     },
     "validation_rules": [
       "Email must contain @ and a valid domain.",
       "Website must be a printed domain or URL, not guessed from email unless separately printed.",
+      "The app validates Email1/Email2, Website, and Contact1-3 from the transcript after Gemini returns. Unsupported values are removed.",
       "For country_code, explicit phone prefixes such as +62, +91, and +971 win over address guesses.",
-      "If phone fields already include a prefix, separate country_code from local phone_number/mobile_number/fax_number."
+      "Contact1, Contact2, and Contact3 must be digits only and include country calling code when visible or inferable.",
+      "Do not include plus signs, spaces, hyphens, or parentheses in Contact1/Contact2/Contact3.",
+      "If Contact1/Contact2/Contact3 already starts with the country calling code, do not add the code again.",
+      "If multiple card sides are provided, use front side for person/company/contact fields and back side for address/category/supporting details."
     ]
   }
 }

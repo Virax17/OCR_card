@@ -7,3 +7,5 @@ Pillow
 openpyxl
 pytest
 google-genai
+google-auth
+requests
