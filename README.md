@@ -42,6 +42,9 @@ Edit `.env` and add your local keys and service-account path:
 GEMINI_API_KEY=...
 GEMINI_API_KEY_2=...
 GEMINI_API_KEY_3=...
+GEMINI_API_KEY_4=...
+GEMINI_API_KEY_5=...
+GEMINI_API_KEY_6=...
 GOOGLE_APPLICATION_CREDENTIALS=D:\path\to\service-account.json
 ```
 
@@ -74,12 +77,12 @@ The UI shows separate local counters for:
 - Gemini requests, minute usage, estimated tokens, configured key/project count.
 - Google Vision OCR requests, monthly OCR units, and estimated cost after the configured free allowance.
 
-Gemini limits are project-level. If the three configured Gemini keys belong to three separate Google AI Studio projects and each project has the active free-tier limit of `20 RPD`, the local app-side estimate is:
+Gemini limits are project-level. If the six configured Gemini keys belong to six separate Google AI Studio projects and each project has the active free-tier limit of `20 RPD`, the local app-side estimate is:
 
 ```text
-60 Gemini-sorted cards per Pacific-day reset window
-15 requests per minute
-750K input tokens per minute
+120 Gemini-sorted cards per Pacific-day reset window
+30 requests per minute
+1.5M input tokens per minute
 ```
 
 Google Vision is counted per image side:

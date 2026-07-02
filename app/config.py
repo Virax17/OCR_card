@@ -17,22 +17,35 @@ DEFAULT_EVENT_NAME = os.getenv("DEFAULT_EVENT_NAME", "Test Uploads")
 DEFAULT_EVENT_DATE = os.getenv("DEFAULT_EVENT_DATE", "2026-07-01")
 DEFAULT_COUNTRY = os.getenv("DEFAULT_COUNTRY", "IN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2")
-GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3")
-GEMINI_API_KEYS = [
-    key.strip()
-    for key in ",".join(
+
+
+def _gemini_api_keys_from_env() -> list[str]:
+    numbered_keys = [
         value
-        for value in [
-            os.getenv("GEMINI_API_KEYS", ""),
-            GEMINI_API_KEY or "",
-            GEMINI_API_KEY_2 or "",
-            GEMINI_API_KEY_3 or "",
-        ]
-        if value
-    ).split(",")
-    if key.strip()
-]
+        for _, value in sorted(
+            (
+                (int(name.rsplit("_", 1)[1]), value)
+                for name, value in os.environ.items()
+                if name.startswith("GEMINI_API_KEY_")
+                and name.rsplit("_", 1)[1].isdigit()
+                and value
+            ),
+            key=lambda item: item[0],
+        )
+    ]
+    values = [os.getenv("GEMINI_API_KEYS", ""), GEMINI_API_KEY or "", *numbered_keys]
+    keys: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for key in value.split(","):
+            clean = key.strip()
+            if clean and clean not in seen:
+                keys.append(clean)
+                seen.add(clean)
+    return keys
+
+
+GEMINI_API_KEYS = _gemini_api_keys_from_env()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_PROJECT_COUNT = max(1, int(os.getenv("GEMINI_PROJECT_COUNT", str(len(GEMINI_API_KEYS) or 1))))
 GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT = int(

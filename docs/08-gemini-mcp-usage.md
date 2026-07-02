@@ -38,7 +38,10 @@ Configured in `.env`:
 GEMINI_API_KEY=...
 GEMINI_API_KEY_2=...
 GEMINI_API_KEY_3=...
-GEMINI_PROJECT_COUNT=3
+GEMINI_API_KEY_4=...
+GEMINI_API_KEY_5=...
+GEMINI_API_KEY_6=...
+GEMINI_PROJECT_COUNT=6
 GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT=20
 GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT=5
 GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT=250000
@@ -46,14 +49,14 @@ GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT=250000
 
 These are soft app-side guardrails, not Google-enforced quotas.
 
-For three separate Google AI Studio projects with the active Gemini 2.5 Flash limits shown in AI Studio:
+For six separate Google AI Studio projects with the active Gemini 2.5 Flash limits shown in AI Studio:
 
 ```text
 Per project: 20 RPD, 5 RPM, 250K TPM
-Combined local estimate: 60 Gemini-sorted cards/day, 15 requests/minute, 750K tokens/minute
+Combined local estimate: 120 Gemini-sorted cards/day, 30 requests/minute, 1.5M tokens/minute
 ```
 
-The normal upload path uses one Gemini text-sorting request per card after Google Vision OCR. Therefore the practical Gemini-limited estimate is about 60 cards per Pacific-day reset window if each of the three projects has 20 RPD available. Google Vision has its own OCR quota and is tracked separately.
+The normal upload path uses one Gemini text-sorting request per card after Google Vision OCR. Therefore the practical Gemini-limited estimate is about 120 cards per Pacific-day reset window if each of the six projects has 20 RPD available. Google Vision has its own OCR quota and is tracked separately.
 
 ## Business Category Taxonomy
 
