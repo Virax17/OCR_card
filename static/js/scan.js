@@ -17,7 +17,7 @@ export function wireScanScreen() {
   $("#scanFallbackGalleryBtn").addEventListener("click", () => $("#scanGalleryInput").click());
   $("#scanGalleryInput").addEventListener("change", handleGalleryChange);
   $("#shutterBtn").addEventListener("click", handleShutter);
-  $("#scanPlayBtn").addEventListener("click", playVideo);
+  $("#scanPlayBtn").addEventListener("click", () => playVideo("Tap to retry camera"));
   $("#batchToggle").addEventListener("click", toggleBatchMode);
   $("#batchDoneBtn").addEventListener("click", finishBatch);
   $("#reviewRetakeBtn").addEventListener("click", retakePhoto);
@@ -69,10 +69,17 @@ const CAMERA_ERROR_MESSAGES = {
   OverconstrainedError: "This device's camera doesn't support the requested settings.",
 };
 
+const CAMERA_CONSTRAINTS = [
+  { video: { facingMode: { ideal: "environment" } } },
+  { video: true },
+];
+
 async function startCamera() {
+  stopCamera();
   $("#scanFallback").classList.remove("is-active");
   $("#scanPlayBtn").hidden = true;
   $("#scanVideo").style.display = "block";
+  prepareVideoElement();
 
   // getUserMedia only exists in a secure context (HTTPS, or localhost/127.0.0.1
   // for local dev). Over plain http://<lan-ip> — the most common way a phone
@@ -83,42 +90,106 @@ async function startCamera() {
     return;
   }
 
-  const constraints = { video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } };
   try {
-    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    stream = await openCameraStream();
   } catch (error) {
-    if (error?.name === "OverconstrainedError") {
-      // Some devices reject width/height ideals entirely; retry with just
-      // the soft facingMode constraint before giving up.
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      } catch (retryError) {
-        showFallback(CAMERA_ERROR_MESSAGES[retryError?.name]);
-        return;
-      }
-    } else {
-      showFallback(CAMERA_ERROR_MESSAGES[error?.name]);
-      return;
-    }
+    showFallback(CAMERA_ERROR_MESSAGES[error?.name] || `Camera could not start (${error?.name || "unknown error"}). You can still import photos from your gallery.`);
+    return;
   }
 
   $("#scanVideo").srcObject = stream;
-  await playVideo();
+  await playVideo("Tap to start camera");
 }
 
-async function playVideo() {
+async function openCameraStream() {
+  let lastError = null;
+  for (const constraints of CAMERA_CONSTRAINTS) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+      if (["NotAllowedError", "NotFoundError", "NotReadableError", "SecurityError"].includes(error?.name)) {
+        break;
+      }
+    }
+  }
+  throw lastError || new Error("Camera unavailable");
+}
+
+function prepareVideoElement() {
   const video = $("#scanVideo");
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute("muted", "");
+  video.setAttribute("autoplay", "");
+  video.setAttribute("playsinline", "");
+  video.setAttribute("webkit-playsinline", "");
+}
+
+function hasRenderableVideoFrame(video) {
+  return video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+}
+
+function waitForVideoFrame(video, timeoutMs = 3500) {
+  if (hasRenderableVideoFrame(video)) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let done = false;
+    let intervalId = null;
+    let timeoutId = null;
+    const events = ["loadedmetadata", "loadeddata", "canplay", "playing", "resize"];
+
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      events.forEach((eventName) => video.removeEventListener(eventName, check));
+      if (intervalId) window.clearInterval(intervalId);
+      if (timeoutId) window.clearTimeout(timeoutId);
+      resolve(value);
+    };
+
+    const check = () => {
+      if (hasRenderableVideoFrame(video)) finish(true);
+    };
+
+    events.forEach((eventName) => video.addEventListener(eventName, check));
+    intervalId = window.setInterval(check, 100);
+    timeoutId = window.setTimeout(() => finish(hasRenderableVideoFrame(video)), timeoutMs);
+
+    if ("requestVideoFrameCallback" in video) {
+      video.requestVideoFrameCallback(() => finish(hasRenderableVideoFrame(video)));
+    }
+  });
+}
+
+function showPlayPrompt(message = "Tap to start camera") {
+  const button = $("#scanPlayBtn");
+  button.textContent = message;
+  button.hidden = false;
+}
+
+async function playVideo(promptMessage) {
+  const video = $("#scanVideo");
+  prepareVideoElement();
   try {
     await video.play();
-    $("#scanPlayBtn").hidden = true;
-  } catch {
+  } catch (error) {
     // Some mobile browsers (notably iOS Safari) can reject autoplay of a
     // srcObject stream even inside a user gesture — the stream stays live
     // but the video never renders, leaving a black viewfinder with no
     // feedback. Surface an explicit control so the user can retry the play()
     // call from a direct tap, which browsers always allow.
-    $("#scanPlayBtn").hidden = false;
+    showPlayPrompt(promptMessage);
+    return false;
   }
+
+  if (!(await waitForVideoFrame(video))) {
+    showPlayPrompt("Tap to retry camera");
+    return false;
+  }
+  $("#scanPlayBtn").hidden = true;
+  return true;
 }
 
 function showFallback(message) {
@@ -132,6 +203,11 @@ function stopCamera() {
   if (stream) {
     stream.getTracks().forEach((track) => track.stop());
     stream = null;
+  }
+  const video = $("#scanVideo");
+  if (video) {
+    video.pause();
+    video.srcObject = null;
   }
 }
 
@@ -181,7 +257,7 @@ async function handleShutter() {
 function captureFrame() {
   return new Promise((resolve) => {
     const video = $("#scanVideo");
-    if (!video.videoWidth) return resolve(null);
+    if (!hasRenderableVideoFrame(video)) return resolve(null);
     const canvas = $("#scanCanvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
