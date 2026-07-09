@@ -6,14 +6,17 @@ Local FastAPI web app for scanning one-sided or two-sided business cards, review
 
 ```text
 front/back card image
-  -> Google Vision DOCUMENT_TEXT_DETECTION OCR
-  -> deterministic email, phone, website, address, country hints
-  -> Gemini text-only field sorting
+  -> image preprocessing for OCR (EXIF rotation, contrast, downscale)
+  -> Google Vision DOCUMENT_TEXT_DETECTION OCR with language hints
+  -> layout-aware OCR blocks with line size and top/middle/bottom position cues
+  -> deterministic email, phone, website, address, zip, country, name/company hints
+  -> Gemini JSON field sorting with OCR layout annotations
+  -> deterministic cleanup and fallback extraction
   -> SQLite event database
   -> Excel export in the requested contacts format
 ```
 
-The normal upload path uses Google Vision for OCR and one Gemini sorting call per card. Gemini does not receive the image in the normal flow, which keeps the LLM focused on classifying OCR text into fields instead of guessing from design elements.
+The normal upload path preprocesses each card side, sends the cleaned bytes to Google Vision for OCR, then uses one Gemini sorting call per card. Gemini does not receive the image in the normal flow; it receives OCR text, rule-based candidate hints, and line-level layout annotations so it can distinguish top brand/company text from a person's name more reliably.
 
 ## Excel Columns
 
@@ -46,7 +49,11 @@ GEMINI_API_KEY_4=...
 GEMINI_API_KEY_5=...
 GEMINI_API_KEY_6=...
 GOOGLE_APPLICATION_CREDENTIALS=D:\path\to\service-account.json
+GOOGLE_VISION_MODEL=builtin/stable
+GOOGLE_VISION_LANGUAGE_HINTS=en
 ```
+
+`GOOGLE_VISION_LANGUAGE_HINTS` is a comma-separated list of BCP-47 language codes, such as `en,id,ar,zh`, that can improve recognition of non-English names and business-card text.
 
 Never commit `.env`, service-account JSON files, event databases, or card images.
 
@@ -64,7 +71,9 @@ http://127.0.0.1:8022
 
 ## Mobile PWA / Deployment Note
 
-The UI is a mobile-first installable PWA (bottom nav, full-screen scan viewfinder, offline capture queue). Camera access (`getUserMedia`) and the service worker only work over **HTTPS or `localhost`**. If the team accesses the app over a LAN IP at a trade show, terminate TLS in front of it (e.g. a Caddy/nginx reverse proxy with a self-signed cert, or a Tailscale HTTPS certificate) — plain `http://<lan-ip>:port` will not allow camera capture or installation on phones.
+The UI is a mobile-first installable PWA (bottom nav, full-screen scan viewfinder, offline capture queue). Camera access (`getUserMedia`) and the service worker only work over **HTTPS or `localhost`**. If the team accesses the app over a LAN IP at a trade show, terminate TLS in front of it (e.g. a Caddy/nginx reverse proxy with a self-signed cert, or a Tailscale HTTPS certificate) - plain `http://<lan-ip>:port` will fall back to gallery import because browsers block camera capture on insecure origins.
+
+The scan screen shows specific recovery messages for blocked permission, missing cameras, cameras already in use, insecure connections, and mobile browsers that require a direct tap before video playback starts.
 
 ## Deploy Free on Render
 
@@ -73,21 +82,21 @@ The app deploys to [Render](https://render.com)'s free tier with no database ser
 **Steps**
 
 1. Push this repo to GitHub. `.env`, `events/`, `venv/`, `.cache/`, and `data/` are gitignored, so no secrets or local data are committed.
-2. On Render: **New → Web Service** (or **New → Blueprint** to use `render.yaml`), and connect the GitHub repo. Render auto-detects Python and uses:
+2. On Render: **New -> Web Service** (or **New -> Blueprint** to use `render.yaml`), and connect the GitHub repo. Render auto-detects Python and uses:
    - Build: `pip install -r requirements.txt`
    - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 3. In the service's **Environment** settings, add the secrets (all marked `sync: false` in the blueprint, so you enter them in the dashboard):
-   - `GEMINI_API_KEY` (plus `GEMINI_API_KEY_2` … `_6` for extra daily quota).
-   - `GOOGLE_CREDENTIALS_JSON` — paste the **entire** service-account JSON as a single value (raw JSON or base64). This replaces the on-disk key file; no file needs to be uploaded. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset on Render.
+   - `GEMINI_API_KEY` (plus `GEMINI_API_KEY_2` through `_6` for extra daily quota).
+   - `GOOGLE_CREDENTIALS_JSON` - paste the **entire** service-account JSON as a single value (raw JSON or base64). This replaces the on-disk key file; no file needs to be uploaded. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset on Render.
    - `EVENTS_ROOT` is set to `/tmp/events` by the blueprint (ephemeral scratch dir).
-4. Deploy. The public URL is `https://<name>.onrender.com` — HTTPS is automatic, so camera capture and PWA install work out of the box.
+4. Deploy. The public URL is `https://<name>.onrender.com` - HTTPS is automatic, so camera capture and PWA install work out of the box.
 
 **Free-tier tradeoffs (by design here)**
 
-- **Ephemeral storage:** scanned images, the per-event SQLite databases, and Excel exports are stored on the instance's temp disk and **reset on every restart/redeploy and after ~15 minutes of inactivity**. There is no external database. **Download the Excel export before you leave** — treat each sitting as one session.
+- **Ephemeral storage:** scanned images, the per-event SQLite databases, and Excel exports are stored on the instance's temp disk and **reset on every restart/redeploy and after ~15 minutes of inactivity**. There is no external database. **Download the Excel export before you leave** - treat each sitting as one session.
 - **Cold starts:** the free service spins down after ~15 min idle; the next request takes ~1 minute to wake it.
 
-If you later need data to survive restarts, that requires a paid tier with a persistent disk or an external store — out of scope for the free setup.
+If you later need data to survive restarts, that requires a paid tier with a persistent disk or an external store - out of scope for the free setup.
 
 ### Portable / other hosts
 
