@@ -78,6 +78,57 @@ export function usagePanelHtml(usage, health) {
       resetLabel: nextMonthLabel(),
     })}
     ${vision.monthly_units != null ? monthlyVisionRow(vision) : ""}
+    ${mongoUsageRows(usage.mongo)}
+  `;
+}
+
+// Persistent credit limits stored in MongoDB (survive server restarts and
+// auto-reset by time bucket). These are the enforced hard caps.
+function mongoUsageRows(mongo) {
+  if (!mongo || !mongo.enabled || !mongo.available) return "";
+  const rows = [];
+  if (mongo.google_vision) {
+    rows.push(mongoCreditRow({
+      name: "Vision credit (this month)",
+      unit: "OCR units",
+      data: mongo.google_vision,
+      resetLabel: nextMonthLabel(),
+    }));
+  }
+  if (mongo.gemini) {
+    rows.push(mongoCreditRow({
+      name: "Gemini credit (today)",
+      unit: "requests",
+      data: mongo.gemini,
+      resetLabel: nextMidnightUtcLabel(),
+    }));
+  }
+  return rows.join("");
+}
+
+function mongoCreditRow({ name, unit, data, resetLabel }) {
+  const used = Number(data.used || 0);
+  const limit = Number(data.limit || 0);
+  const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const hitLimit = Boolean(data.hit_limit);
+  const nearLimit = !hitLimit && percent >= 80;
+  const barState = hitLimit ? "danger" : nearLimit ? "warning" : "";
+  const statusPill = hitLimit
+    ? `<span class="status-pill error">Limit reached</span>`
+    : nearLimit
+      ? `<span class="status-pill warning">Near limit</span>`
+      : `<span class="status-pill ok">OK</span>`;
+  return `
+    <div class="provider-row">
+      <div class="provider-row-head">
+        <span class="name">${escapeHtml(name)}</span>
+        ${statusPill}
+      </div>
+      <div class="provider-row-count">${used} / ${limit} ${escapeHtml(unit)} · ${escapeHtml(resetLabel)}</div>
+      ${limit ? `<div class="meter-track"><div class="meter-fill ${barState}" style="width:${percent}%"></div></div>` : ""}
+      ${hitLimit ? `<div class="provider-row-note error">Credit limit reached — new scans are blocked until it resets. ${escapeHtml(resetLabel)}.</div>` : ""}
+      ${nearLimit ? `<div class="provider-row-note warning">Approaching the credit limit. ${escapeHtml(resetLabel)}.</div>` : ""}
+    </div>
   `;
 }
 

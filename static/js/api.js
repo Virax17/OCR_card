@@ -2,7 +2,11 @@ export async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(data.detail || `Request failed: ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(data.detail || `Request failed: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 

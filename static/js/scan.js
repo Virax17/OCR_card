@@ -162,20 +162,16 @@ function renderBatchTray() {
 }
 
 async function finishBatch() {
-  const { state, showToast } = await import("./app-shell.js");
   if (!batchItems.length) {
     toggleBatchMode();
     return;
   }
-  const items = [...batchItems];
+  // Hand the captured blobs to the preview/confirm sheet, then clear the tray.
+  const blobs = batchItems.map((item) => item.blob);
   resetBatch();
   toggleBatchMode();
-  stats.processing += items.length;
-  updateStatusStrip();
-  showToast(`Processing ${items.length} card${items.length === 1 ? "" : "s"}…`, "info");
-  for (const item of items) {
-    await enqueueAndTrack(state.eventId, item.blob, null);
-  }
+  const { openProcessSheet } = await import("./process-sheet.js");
+  openProcessSheet(blobs.map((blob) => ({ blob })));
 }
 
 function showReviewFrame(blob) {
@@ -224,9 +220,15 @@ async function enqueueAndTrack(eventId, front, back) {
 }
 
 function handleQueueEvent(event) {
-  stats.processing = Math.max(0, stats.processing - 1);
-  if (event.detail?.success) stats.done += 1; else stats.failed += 1;
-  updateStatusStrip();
+  // Only the single-capture path feeds this aggregate strip now; gallery/batch
+  // uploads report their own per-photo status in the process sheet. Update the
+  // counters only while we're actually tracking a single capture, but always
+  // refresh records so newly processed cards appear regardless of the source.
+  if (stats.processing > 0) {
+    stats.processing -= 1;
+    if (event.detail?.success) stats.done += 1; else stats.failed += 1;
+    updateStatusStrip();
+  }
   import("./app-shell.js").then(({ refreshAll }) => refreshAll());
 }
 
@@ -255,10 +257,6 @@ export async function importGalleryFiles(files) {
   if (!imageFiles.length) return;
   const { state, showToast } = await import("./app-shell.js");
   if (!state.eventId) return showToast("Create or select an event first.", "error");
-  stats.processing += imageFiles.length;
-  updateStatusStrip();
-  showToast(`Processing ${imageFiles.length} image${imageFiles.length === 1 ? "" : "s"}…`, "info");
-  for (const file of imageFiles) {
-    await enqueueAndTrack(state.eventId, file, null);
-  }
+  const { openProcessSheet } = await import("./process-sheet.js");
+  openProcessSheet(imageFiles.map((file) => ({ blob: file, name: file.name })));
 }

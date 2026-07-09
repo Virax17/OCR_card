@@ -100,10 +100,10 @@
         </div>
 
         <div class="section-header">
-          <span class="section-label">Recent captures</span>
-          <button class="section-link" data-route="#/records" type="button">View all &rarr;</button>
+          <span class="section-label">Processing</span>
+          <button class="section-link" data-route="#/records" type="button">View records &rarr;</button>
         </div>
-        <div id="recentList" class="recent-list"></div>
+        <div id="processingPanel" class="queue-panel"></div>
 
         <div id="usageCard" class="usage-card">
           <div class="section-label" style="margin-bottom:10px;">API usage</div>
@@ -378,6 +378,58 @@
         <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
       </button>
       <img id="fullCardImage" alt="Business card full preview">
+    </dialog>
+
+    <!-- Preview / confirm / live-processing sheet -->
+    <dialog id="processSheet" class="sheet process-sheet">
+      <div class="sheet-handle"></div>
+
+      <!-- VIEW A: preview + confirm -->
+      <div id="processConfirmView">
+        <div class="sheet-header">
+          <h2>Review photos</h2>
+          <button id="processCloseBtn" class="btn icon-btn" type="button" aria-label="Close">
+            <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+          </button>
+        </div>
+        <div class="sheet-body">
+          <p class="process-hint" style="color:var(--text-dim);font-size:var(--font-sm);margin-bottom:var(--space-3)">
+            Remove any photos you don't want, then start processing.
+          </p>
+          <div id="processGrid" class="process-grid"></div>
+        </div>
+        <div class="sheet-footer">
+          <button id="processCancelBtn" class="btn outline" type="button">Cancel</button>
+          <button id="processConfirmBtn" class="btn primary" type="button">Process 0 photos</button>
+        </div>
+      </div>
+
+      <!-- VIEW B: live processing -->
+      <div id="processLiveView" hidden>
+        <div class="sheet-header">
+          <h2 id="processLiveTitle">Processing&hellip;</h2>
+          <button id="processLiveCloseBtn" class="btn icon-btn" type="button" aria-label="Close" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+          </button>
+        </div>
+        <div class="sheet-body">
+          <div class="meter">
+            <div class="meter-label">
+              <span class="name">Progress</span>
+              <span class="value" id="processProgressValue">0 / 0</span>
+            </div>
+            <div class="meter-track"><div class="meter-fill" id="processProgressFill" style="width:0%"></div></div>
+          </div>
+          <p id="processOfflineHint" class="process-hint" style="color:var(--warn);font-size:var(--font-sm);margin-bottom:var(--space-3)" hidden>
+            Offline &mdash; photos will process automatically when you're back online.
+          </p>
+          <div id="processLiveList" class="process-live-list"></div>
+        </div>
+        <div class="sheet-footer" id="processLiveFooter" hidden>
+          <button id="processRetryAllBtn" class="btn outline" type="button" hidden>Retry failed</button>
+          <button id="processDoneBtn" class="btn primary" type="button">Done</button>
+        </div>
+      </div>
     </dialog>
 
     <script type="module" src="/static/js/app-shell.js"></script>

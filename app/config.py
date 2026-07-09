@@ -75,6 +75,20 @@ GOOGLE_VISION_PRICE_PER_1000 = float(os.getenv("GOOGLE_VISION_PRICE_PER_1000", "
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 
+# MongoDB — persistent, restart-surviving usage counters with per-period buckets.
+# Unset MONGODB_URI (or MONGO_USAGE_ENABLED=false) disables the feature entirely;
+# processing then falls back to the local SQLite-only behaviour.
+MONGODB_URI = os.getenv("MONGODB_URI", "")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "cardscan")
+MONGO_USAGE_ENABLED = os.getenv("MONGO_USAGE_ENABLED", "true").lower() not in {"0", "false", "no"}
+# Google Vision free tier is 1000 OCR units per calendar month.
+MONGO_VISION_MONTHLY_LIMIT = int(os.getenv("MONGO_VISION_MONTHLY_LIMIT", "1000"))
+# Gemini: hard global cap on requests per day across all API keys.
+MONGO_GEMINI_DAILY_LIMIT = int(os.getenv("MONGO_GEMINI_DAILY_LIMIT", "120"))
+# How long a usage bucket document lives before Mongo auto-deletes it (TTL).
+# Comfortably longer than a month so the current bucket is never expired early.
+MONGO_USAGE_TTL_DAYS = int(os.getenv("MONGO_USAGE_TTL_DAYS", "40"))
+
 EXCEL_COLUMNS = [
     "date",
     "name",

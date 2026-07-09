@@ -4,6 +4,7 @@ import { renderRecords, refreshRecords, openRecordsMenu, wireRecordsScreen } fro
 import { wireEventSheet, openEventSheet, refreshEventLabel } from "./events.js";
 import { wireScanScreen, openScanScreen } from "./scan.js";
 import { wireMoreScreen, refreshMoreScreen } from "./more.js";
+import { wireProcessSheet } from "./process-sheet.js";
 import { initQueue, getQueueSnapshot } from "./queue.js";
 
 export const state = {
@@ -28,6 +29,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireRecordsScreen();
   wireScanScreen();
   wireMoreScreen();
+  wireProcessSheet();
   window.addEventListener("hashchange", handleRouteChange);
   window.addEventListener("online", handleConnectivityChange);
   window.addEventListener("offline", handleConnectivityChange);
@@ -152,7 +154,11 @@ function handleConnectivityChange() {
 function handleQueueChanged(event) {
   state.pendingQueue = event.detail?.items || getQueueSnapshot();
   updateNetStatusPill();
-  if (state.route === "#/home") refreshDashboard(state);
+  // Desktop (>=1024px) renders home + records as one merged 2-pane view via
+  // CSS regardless of route, so the left-rail processing panel must stay live
+  // even while the user is looking at Records (mirrors handleRouteChange).
+  const isDesktop = window.matchMedia("(min-width: 1024px)").matches;
+  if (state.route === "#/home" || isDesktop) refreshDashboard(state);
   if (state.route === "#/more") refreshMoreScreen(state);
 }
 

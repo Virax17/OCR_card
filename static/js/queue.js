@@ -80,7 +80,8 @@ export async function enqueueCapture(eventId, frontBlob, backBlob) {
     status: "pending",
   };
   if (db) {
-    await requestToPromise(tx("readwrite").add(record));
+    const id = await requestToPromise(tx("readwrite").add(record));
+    record.id = id;
     await refreshSnapshot();
   }
   processQueue();
@@ -131,10 +132,12 @@ async function processOne(item) {
     await api.uploadCard(item.eventId, item.frontBlob, "front.jpg", item.backBlob, "back.jpg");
     await requestToPromise(tx("readwrite").delete(item.id));
     await refreshSnapshot();
-    window.dispatchEvent(new CustomEvent("queueItemProcessed", { detail: { success: true } }));
+    window.dispatchEvent(new CustomEvent("queueItemProcessed", { detail: { id: item.id, success: true } }));
   } catch (error) {
     item.attempts = (item.attempts || 0) + 1;
-    if (item.attempts >= MAX_ATTEMPTS) {
+    // A 429 means a usage credit limit was hit — retrying won't help until it
+    // resets, so mark it failed immediately instead of burning 5 backoff cycles.
+    if (error.status === 429 || item.attempts >= MAX_ATTEMPTS) {
       item.status = "failed";
       await requestToPromise(tx("readwrite").put(item));
       await refreshSnapshot();
@@ -145,6 +148,6 @@ async function processOne(item) {
       const delay = BACKOFF_MS[Math.min(item.attempts - 1, BACKOFF_MS.length - 1)];
       await new Promise((resolve) => window.setTimeout(resolve, delay));
     }
-    window.dispatchEvent(new CustomEvent("queueItemProcessed", { detail: { success: false, error: error.message } }));
+    window.dispatchEvent(new CustomEvent("queueItemProcessed", { detail: { id: item.id, success: false, error: error.message } }));
   }
 }

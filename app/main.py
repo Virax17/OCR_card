@@ -30,6 +30,7 @@ from app.llm.gemini_client import (
 )
 from app.llm.usage_monitor import provider_usage_snapshot, usage_snapshot
 from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, UpdateRecordIn
+from app.storage import mongo_usage
 from app.ocr.google_vision import extract_text as google_vision_extract_text
 from app.ocr.google_vision import is_google_vision_configured
 from app.storage.db import event_dir, initialize_event_database, new_id, utc_now
@@ -294,6 +295,8 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         for result in ocr_results:
             insert_ocr_result(event_id, card_id, result)
         save_ocr_audit(event_id, card_id, ocr_results)
+        # One Google Vision OCR unit is billed per image side sent.
+        mongo_usage.increment("google_vision", amount=len(ocr_results))
 
         front_ocr = next((result.raw_text for result in ocr_results if result.side == "front"), "")
         back_ocr = next((result.raw_text for result in ocr_results if result.side == "back"), None)
@@ -318,7 +321,11 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
             back_text=back_ocr,
             candidate_hints=candidate_hints,
         )
-        if not fields:
+        if fields:
+            # A non-empty result means the Gemini request actually ran (vs. the
+            # deterministic fallback, which makes no API call).
+            mongo_usage.increment("gemini", amount=1)
+        else:
             fields = deterministic_fields
         save_llm_audit(event_id, card_id, fields)
         draft = record_from_llm_fields(
@@ -353,6 +360,9 @@ async def upload_card(
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
 ) -> ProcessingResult:
+    allowed, reason = mongo_usage.check_limits()
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
     front_bytes = await read_upload(front)
     back_bytes = await read_upload(back)
     if front_bytes is None:
@@ -468,6 +478,7 @@ def usage_response() -> dict:
             "free_units_monthly": vision.free_units_monthly,
             "estimated_cost_usd": vision.estimated_cost_usd,
         },
+        "mongo": mongo_usage.usage_report(),
         "note": "Local app-side monitor only. Gemini active limits/credit are in Google AI Studio; Google Vision quota/billing are in Google Cloud Console.",
     }
 

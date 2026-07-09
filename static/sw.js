@@ -1,4 +1,4 @@
-const CACHE_VERSION = "cardscan-v1";
+const CACHE_VERSION = "cardscan-v4";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
@@ -10,6 +10,7 @@ const PRECACHE_URLS = [
   "/static/js/utils.js",
   "/static/js/scan.js",
   "/static/js/queue.js",
+  "/static/js/process-sheet.js",
   "/static/js/records.js",
   "/static/js/dashboard.js",
   "/static/js/events.js",
