@@ -47,7 +47,7 @@ function providerRowHtml({ name, configured, used, limit, resetLabel }) {
       </div>
       <div class="provider-row-count">${safeUsed}${safeLimit ? ` / ${safeLimit}` : ""} requests today</div>
       ${safeLimit ? `<div class="meter-track"><div class="meter-fill ${barState}" style="width:${percent}%"></div></div>` : ""}
-      ${hitLimit ? `<div class="provider-row-note error">Daily limit reached — new scans will fail until it resets. ${escapeHtml(resetLabel)}.</div>` : ""}
+      ${hitLimit ? `<div class="provider-row-note error">Daily limit reached - new scans will fail until it resets. ${escapeHtml(resetLabel)}.</div>` : ""}
       ${nearLimit && !hitLimit ? `<div class="provider-row-note warning">Approaching the daily limit. ${escapeHtml(resetLabel)}.</div>` : ""}
     </div>
   `;
@@ -55,12 +55,22 @@ function providerRowHtml({ name, configured, used, limit, resetLabel }) {
 
 export function usagePanelHtml(usage, health) {
   if (!usage) {
-    return `<div class="provider-row-note">Usage unavailable — check the connection.</div>`;
+    return `<div class="provider-row-note">Usage unavailable - check the connection.</div>`;
   }
+
+  const mongo = usage.mongo || {};
   const gemini = usage.gemini || usage;
   const vision = usage.google_vision || {};
   const geminiConfigured = health ? Boolean(health.gemini_configured) : true;
   const visionConfigured = health ? Boolean(health.google_vision_configured) : true;
+
+  if (mongo.enabled) {
+    return `
+      ${mongoStatusRow(mongo)}
+      ${providerConfigWarnings({ geminiConfigured, visionConfigured })}
+      ${mongoUsageRows(mongo)}
+    `;
+  }
 
   return `
     ${providerRowHtml({
@@ -78,18 +88,52 @@ export function usagePanelHtml(usage, health) {
       resetLabel: nextMonthLabel(),
     })}
     ${vision.monthly_units != null ? monthlyVisionRow(vision) : ""}
-    ${mongoUsageRows(usage.mongo)}
+    <div class="provider-row-note warning">MongoDB tracker is not enabled, so usage resets with local app data.</div>
   `;
 }
 
-// Persistent credit limits stored in MongoDB (survive server restarts and
-// auto-reset by time bucket). These are the enforced hard caps.
+function providerConfigWarnings({ geminiConfigured, visionConfigured }) {
+  const rows = [];
+  if (!geminiConfigured) rows.push(providerRowHtml({ name: "Gemini (field sorting)", configured: false }));
+  if (!visionConfigured) rows.push(providerRowHtml({ name: "Google Vision (OCR)", configured: false }));
+  return rows.join("");
+}
+
+function mongoStatusRow(mongo) {
+  if (mongo.available) {
+    return `
+      <div class="provider-row">
+        <div class="provider-row-head">
+          <span class="name">MongoDB 24/7 tracker</span>
+          <span class="status-pill ok">Live</span>
+        </div>
+        <div class="provider-row-note">Persistent counters are stored in MongoDB and survive app restarts, redeploys, and free-tier sleep.</div>
+      </div>
+    `;
+  }
+
+  const status = mongo.fail_closed ? "Blocking scans" : "Not enforcing";
+  const message = mongo.fail_closed
+    ? "MongoDB is configured but unreachable, so new scans are blocked to keep limits accurate."
+    : "MongoDB is configured but unreachable. Scans can continue, but the persistent tracker is not updating.";
+  const detail = mongo.error ? ` ${mongo.error}` : "";
+  return `
+    <div class="provider-row provider-row--error">
+      <div class="provider-row-head">
+        <span class="name">MongoDB 24/7 tracker</span>
+        <span class="status-pill error">${escapeHtml(status)}</span>
+      </div>
+      <div class="provider-row-note error">${escapeHtml(message + detail)}</div>
+    </div>
+  `;
+}
+
 function mongoUsageRows(mongo) {
-  if (!mongo || !mongo.enabled || !mongo.available) return "";
+  if (!mongo.available) return "";
   const rows = [];
   if (mongo.google_vision) {
     rows.push(mongoCreditRow({
-      name: "Vision credit (this month)",
+      name: "Google Vision monthly cap",
       unit: "OCR units",
       data: mongo.google_vision,
       resetLabel: nextMonthLabel(),
@@ -97,7 +141,7 @@ function mongoUsageRows(mongo) {
   }
   if (mongo.gemini) {
     rows.push(mongoCreditRow({
-      name: "Gemini credit (today)",
+      name: "Gemini daily cap",
       unit: "requests",
       data: mongo.gemini,
       resetLabel: nextMidnightUtcLabel(),
@@ -109,6 +153,7 @@ function mongoUsageRows(mongo) {
 function mongoCreditRow({ name, unit, data, resetLabel }) {
   const used = Number(data.used || 0);
   const limit = Number(data.limit || 0);
+  const tokens = Number(data.tokens_estimated || 0);
   const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   const hitLimit = Boolean(data.hit_limit);
   const nearLimit = !hitLimit && percent >= 80;
@@ -118,16 +163,17 @@ function mongoCreditRow({ name, unit, data, resetLabel }) {
     : nearLimit
       ? `<span class="status-pill warning">Near limit</span>`
       : `<span class="status-pill ok">OK</span>`;
+  const tokenText = tokens ? `, ${tokens} estimated tokens` : "";
   return `
     <div class="provider-row">
       <div class="provider-row-head">
         <span class="name">${escapeHtml(name)}</span>
         ${statusPill}
       </div>
-      <div class="provider-row-count">${used} / ${limit} ${escapeHtml(unit)} · ${escapeHtml(resetLabel)}</div>
+      <div class="provider-row-count">${used} / ${limit} ${escapeHtml(unit)}${tokenText} - ${escapeHtml(resetLabel)}</div>
       ${limit ? `<div class="meter-track"><div class="meter-fill ${barState}" style="width:${percent}%"></div></div>` : ""}
-      ${hitLimit ? `<div class="provider-row-note error">Credit limit reached — new scans are blocked until it resets. ${escapeHtml(resetLabel)}.</div>` : ""}
-      ${nearLimit ? `<div class="provider-row-note warning">Approaching the credit limit. ${escapeHtml(resetLabel)}.</div>` : ""}
+      ${hitLimit ? `<div class="provider-row-note error">Limit reached - new scans are blocked until it resets. ${escapeHtml(resetLabel)}.</div>` : ""}
+      ${nearLimit ? `<div class="provider-row-note warning">Approaching the limit. ${escapeHtml(resetLabel)}.</div>` : ""}
     </div>
   `;
 }
@@ -144,9 +190,9 @@ function monthlyVisionRow(vision) {
         <span class="name">Vision free tier (this month)</span>
         ${hitLimit ? `<span class="status-pill warning">Billing active</span>` : `<span class="status-pill ok">Within free tier</span>`}
       </div>
-      <div class="provider-row-count">${used}${limit ? ` / ${limit}` : ""} OCR units · ${nextMonthLabel()}</div>
+      <div class="provider-row-count">${used}${limit ? ` / ${limit}` : ""} OCR units - ${nextMonthLabel()}</div>
       ${limit ? `<div class="meter-track"><div class="meter-fill ${barState}" style="width:${percent}%"></div></div>` : ""}
-      ${hitLimit ? `<div class="provider-row-note warning">Free monthly OCR units used up — additional scans are now billed.</div>` : ""}
+      ${hitLimit ? `<div class="provider-row-note warning">Free monthly OCR units used up - additional scans are now billed.</div>` : ""}
     </div>
   `;
 }

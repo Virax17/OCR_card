@@ -68,6 +68,7 @@ async def startup() -> None:
         location="Local",
         notes="Default event",
     )
+    mongo_usage.initialize()
 
 
 @app.get("/")
@@ -102,6 +103,7 @@ async def health() -> dict:
         "gemini_configured": is_gemini_configured(),
         "gemini_key_count": len(gemini_key_labels()),
         "google_vision_configured": is_google_vision_configured(),
+        "mongo_usage": mongo_usage.usage_report(),
         "storage_root": str(EVENTS_ROOT),
         "default_event_id": DEFAULT_EVENT_ID,
     }
@@ -198,6 +200,14 @@ def clear_event_artifacts(event_id: str) -> dict[str, int]:
         folder.mkdir(parents=True, exist_ok=True)
         cleared[folder_name] = count
     return cleared
+
+
+def enforce_usage_limits(required: dict[str, int]) -> None:
+    allowed, reason = mongo_usage.check_limits(required)
+    if allowed:
+        return
+    status_code = 503 if mongo_usage.is_unavailable_reason(reason) else 429
+    raise HTTPException(status_code=status_code, detail=reason)
 
 
 def record_from_llm_fields(
@@ -300,9 +310,6 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         for result in ocr_results:
             insert_ocr_result(event_id, card_id, result)
         save_ocr_audit(event_id, card_id, ocr_results)
-        # One Google Vision OCR unit is billed per image side sent.
-        mongo_usage.increment("google_vision", amount=len(ocr_results))
-
         front_ocr = next((result.raw_text for result in ocr_results if result.side == "front"), "")
         back_ocr = next((result.raw_text for result in ocr_results if result.side == "back"), None)
         if not front_ocr.strip() and not (back_ocr or "").strip():
@@ -327,11 +334,7 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
             candidate_hints=candidate_hints,
             ocr_results=ocr_results,
         )
-        if fields:
-            # A non-empty result means the Gemini request actually ran (vs. the
-            # deterministic fallback, which makes no API call).
-            mongo_usage.increment("gemini", amount=1)
-        else:
+        if not fields:
             fields = deterministic_fields
         save_llm_audit(event_id, card_id, fields)
         draft = record_from_llm_fields(
@@ -366,13 +369,11 @@ async def upload_card(
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
 ) -> ProcessingResult:
-    allowed, reason = mongo_usage.check_limits()
-    if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
     front_bytes = await read_upload(front)
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
+    enforce_usage_limits({"google_vision": 1 + int(bool(back_bytes)), "gemini": 1})
     return process_card(event_id, front, front_bytes, back, back_bytes)
 
 
@@ -388,6 +389,7 @@ async def vision_scan(
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
+    enforce_usage_limits({"gemini": 1})
     fields = structure_card_image(
         event_id=event_id,
         front_image=front_bytes,
@@ -414,6 +416,7 @@ async def ocr_scan(
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
+    enforce_usage_limits({"google_vision": 1 + int(bool(back_bytes))})
     results = [google_vision_extract_text(front_bytes, "front", event_id=event_id)]
     if back_bytes:
         results.append(google_vision_extract_text(back_bytes, "back", event_id=event_id))
@@ -485,7 +488,7 @@ def usage_response() -> dict:
             "estimated_cost_usd": vision.estimated_cost_usd,
         },
         "mongo": mongo_usage.usage_report(),
-        "note": "Local app-side monitor only. Gemini active limits/credit are in Google AI Studio; Google Vision quota/billing are in Google Cloud Console.",
+        "note": "MongoDB usage counters are the app's persistent 24/7 budget tracker when configured. Provider consoles remain the billing source of truth.",
     }
 
 

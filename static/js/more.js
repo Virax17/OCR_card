@@ -79,9 +79,14 @@ async function renderHealth(state) {
   const el = $("#healthList");
   try {
     const data = state.health || (await api.getHealth());
+    const mongo = data.mongo_usage || {};
+    const mongoStatus = mongo.enabled
+      ? (mongo.available ? "live" : (mongo.fail_closed ? "unavailable - blocking scans" : "unavailable"))
+      : "disabled";
     el.innerHTML = `
       <div>Gemini: ${data.gemini_configured ? `configured (${data.gemini_key_count} key${data.gemini_key_count === 1 ? "" : "s"})` : "not configured"}</div>
       <div>Google Vision: ${data.google_vision_configured ? "configured" : "not configured"}</div>
+      <div>MongoDB tracker: ${escapeHtml(mongoStatus)}</div>
       <div>Mode: ${escapeHtml(data.processing_mode || "")}</div>
     `;
   } catch {

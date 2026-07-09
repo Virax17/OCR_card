@@ -12,6 +12,7 @@ from app.config import (
     GOOGLE_VISION_MINUTE_REQUEST_LIMIT,
     GOOGLE_VISION_PRICE_PER_1000,
 )
+from app.storage import mongo_usage
 from app.storage.db import connection, new_id, utc_now
 from app.storage.repositories import db_path_for
 
@@ -193,6 +194,7 @@ def record_usage(
     status: str = "ok",
     error_message: str | None = None,
 ) -> None:
+    total_tokens = prompt_tokens + completion_tokens
     with connection(db_path_for(event_id)) as conn:
         _ensure_usage_columns(conn)
         conn.execute(
@@ -211,7 +213,7 @@ def record_usage(
                 purpose,
                 prompt_tokens,
                 completion_tokens,
-                prompt_tokens + completion_tokens,
+                total_tokens,
                 request_count,
                 status,
                 error_message,
@@ -221,3 +223,11 @@ def record_usage(
                 cost_estimate_usd,
             ),
         )
+    # Keep the 24/7 MongoDB counters in sync with every real API attempt.
+    # Local-limit/config skips do not touch external APIs, so they should not
+    # consume the persistent budget.
+    if status not in {"blocked_local_limit", "skipped_not_configured"}:
+        if provider == "google_vision":
+            mongo_usage.increment(provider, amount=unit_count or request_count)
+        elif provider == "gemini":
+            mongo_usage.increment(provider, amount=request_count, token_count=total_tokens)

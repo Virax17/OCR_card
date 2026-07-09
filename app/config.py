@@ -86,6 +86,9 @@ ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "cardscan")
 MONGO_USAGE_ENABLED = os.getenv("MONGO_USAGE_ENABLED", "true").lower() not in {"0", "false", "no"}
+# When Mongo tracking is configured but unreachable, block new API calls instead
+# of risking invisible quota overuse. Set false only for local/offline testing.
+MONGO_USAGE_FAIL_CLOSED = os.getenv("MONGO_USAGE_FAIL_CLOSED", "true").lower() not in {"0", "false", "no"}
 # Google Vision free tier is 1000 OCR units per calendar month.
 MONGO_VISION_MONTHLY_LIMIT = int(os.getenv("MONGO_VISION_MONTHLY_LIMIT", "1000"))
 # Gemini: hard global cap on requests per day across all API keys.

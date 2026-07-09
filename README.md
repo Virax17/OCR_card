@@ -51,9 +51,14 @@ GEMINI_API_KEY_6=...
 GOOGLE_APPLICATION_CREDENTIALS=D:\path\to\service-account.json
 GOOGLE_VISION_MODEL=builtin/stable
 GOOGLE_VISION_LANGUAGE_HINTS=en
+MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+MONGO_USAGE_ENABLED=true
+MONGO_USAGE_FAIL_CLOSED=true
 ```
 
 `GOOGLE_VISION_LANGUAGE_HINTS` is a comma-separated list of BCP-47 language codes, such as `en,id,ar,zh`, that can improve recognition of non-English names and business-card text.
+
+MongoDB is used as the persistent 24/7 API usage tracker. When `MONGODB_URI` is set and `MONGO_USAGE_ENABLED=true`, the app stores Gemini daily request usage and Google Vision monthly OCR-unit usage in MongoDB so counters survive app restarts, redeploys, and Render free-tier sleep. Keep `MONGO_USAGE_FAIL_CLOSED=true` in production so scans pause if MongoDB is unreachable instead of silently losing limit accuracy.
 
 Never commit `.env`, service-account JSON files, event databases, or card images.
 
@@ -88,6 +93,7 @@ The app deploys to [Render](https://render.com)'s free tier with no database ser
 3. In the service's **Environment** settings, add the secrets (all marked `sync: false` in the blueprint, so you enter them in the dashboard):
    - `GEMINI_API_KEY` (plus `GEMINI_API_KEY_2` through `_6` for extra daily quota).
    - `GOOGLE_CREDENTIALS_JSON` - paste the **entire** service-account JSON as a single value (raw JSON or base64). This replaces the on-disk key file; no file needs to be uploaded. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset on Render.
+   - `MONGODB_URI` - paste the full MongoDB Atlas SRV connection string. The app uses this for persistent API usage counters.
    - `EVENTS_ROOT` is set to `/tmp/events` by the blueprint (ephemeral scratch dir).
 4. Deploy. The public URL is `https://<name>.onrender.com` - HTTPS is automatic, so camera capture and PWA install work out of the box.
 
@@ -112,17 +118,23 @@ The same start command works on any container or Python host (Koyeb, Fly, a VPS,
 
 ## API Usage Monitoring
 
-The UI shows separate local counters for:
+The UI shows a MongoDB-backed 24/7 tracker whenever `MONGODB_URI` is configured:
 
-- Gemini requests, minute usage, estimated tokens, configured key/project count.
-- Google Vision OCR requests, monthly OCR units, and estimated cost after the configured free allowance.
+- Gemini daily cap: request count plus estimated tokens, reset at UTC midnight.
+- Google Vision monthly cap: OCR units, reset on the first day of the next UTC month.
+- MongoDB status: live, disabled, or unavailable/blocking.
 
-Gemini limits are project-level. If the six configured Gemini keys belong to six separate Google AI Studio projects and each project has the active free-tier limit of `20 RPD`, the local app-side estimate is:
+The tracker is also returned by:
 
 ```text
-120 Gemini-sorted cards per Pacific-day reset window
-30 requests per minute
-1.5M input tokens per minute
+GET /llm-usage
+GET /health
+```
+
+Gemini limits are project-level. If the six configured Gemini keys belong to six separate Google AI Studio projects and each project has the active free-tier limit of `20 RPD`, set the Mongo hard cap to:
+
+```text
+MONGO_GEMINI_DAILY_LIMIT=120
 ```
 
 Google Vision is counted per image side:
@@ -131,6 +143,14 @@ Google Vision is counted per image side:
 1-sided card = 1 OCR unit
 2-sided card = 2 OCR units
 ```
+
+For the Google Vision free tier, keep:
+
+```text
+MONGO_VISION_MONTHLY_LIMIT=1000
+```
+
+If either Mongo counter is at or over its configured limit, new scans return `429` and the offline queue stops retrying until the bucket resets.
 
 ## SQLite Console
 
