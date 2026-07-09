@@ -19,6 +19,12 @@ def test_config_report_does_not_connect_to_mongo(monkeypatch) -> None:
     assert report["checked"] is False
 
 
+def test_uri_option_detection_is_case_insensitive() -> None:
+    assert mongo_usage._uri_has_option("mongodb+srv://host/db?retryWrites=true&TLS=false", {"tls"})
+    assert mongo_usage._uri_has_option("mongodb://host/db?ssl_ca_certs=/tmp/ca.pem", {"ssl_ca_certs"})
+    assert not mongo_usage._uri_has_option("mongodb+srv://host/db?retryWrites=true", {"tls", "ssl"})
+
+
 def test_check_limits_allows_when_mongo_not_configured(monkeypatch) -> None:
     monkeypatch.setattr(mongo_usage, "MONGO_USAGE_ENABLED", True)
     monkeypatch.setattr(mongo_usage, "MONGODB_URI", "")

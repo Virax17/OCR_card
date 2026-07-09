@@ -10,3 +10,4 @@ google-genai
 google-auth
 requests
 pymongo[srv]
+certifi

@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from app.config import (
     MONGO_GEMINI_DAILY_LIMIT,
@@ -94,6 +95,14 @@ def _unavailable_reason() -> str:
     return f"{UNAVAILABLE_MESSAGE}{detail}. Processing is paused so API limits stay accurate."
 
 
+def _uri_has_option(uri: str, names: set[str]) -> bool:
+    try:
+        query = urlsplit(uri).query
+    except ValueError:
+        return False
+    return bool({key.lower() for key, _value in parse_qsl(query, keep_blank_values=True)} & names)
+
+
 def _get_collection():
     """Return the usage collection, or None if Mongo is unavailable/disabled."""
     global _client, _index_ready, _last_error
@@ -103,15 +112,22 @@ def _get_collection():
     try:
         if _client is None:
             # Import here so the app still starts if pymongo is missing.
+            import certifi
             from pymongo import MongoClient
             from pymongo.server_api import ServerApi
 
-            _client = MongoClient(
-                MONGODB_URI,
-                server_api=ServerApi("1"),
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=5000,
-            )
+            client_options: dict[str, Any] = {
+                "server_api": ServerApi("1"),
+                "serverSelectionTimeoutMS": 5000,
+                "connectTimeoutMS": 5000,
+                "socketTimeoutMS": 5000,
+            }
+            if MONGODB_URI.lower().startswith("mongodb+srv://") and not _uri_has_option(MONGODB_URI, {"tls", "ssl"}):
+                client_options["tls"] = True
+            if not _uri_has_option(MONGODB_URI, {"tlscafile", "ssl_ca_certs"}):
+                client_options["tlsCAFile"] = certifi.where()
+
+            _client = MongoClient(MONGODB_URI, **client_options)
         collection = _client[MONGODB_DB_NAME][COLLECTION_NAME]
         if not _index_ready:
             collection.create_index([("provider", 1), ("period", 1)], unique=True)
