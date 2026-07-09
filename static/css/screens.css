@@ -473,6 +473,18 @@ body.scan-open #bottomNav {
   display: flex;
 }
 
+.scan-modal-panel {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: #000;
+}
+
 .scan-topbar {
   position: relative;
   z-index: 2;
@@ -491,6 +503,7 @@ body.scan-open #bottomNav {
 .scan-viewfinder {
   position: relative;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   background: #000;
 }
@@ -1152,4 +1165,3 @@ body.scan-open #bottomNav {
 }
 
 .status-chip.done { background: var(--success-bg); color: var(--success); }
-
