@@ -119,6 +119,30 @@ def test_labeled_phone_mobile_and_fax_are_separated() -> None:
     assert record.fax_number == "2129770988"
 
 
+def test_top_all_caps_brand_is_not_name_candidate() -> None:
+    candidates = extract_candidates(
+        [
+            make_result(
+                "\n".join(
+                    [
+                        "TOKKI",
+                        "FITRI ALFIANA",
+                        "Procurement Officer",
+                        "+62 877-7190-3337",
+                        "fia@tef.co.id",
+                    ]
+                )
+            )
+        ]
+    )
+
+    name_values = [candidate.value for candidate in candidates if candidate.field == "name"]
+    company_values = [candidate.value for candidate in candidates if candidate.field == "company"]
+    assert "TOKKI" not in name_values
+    assert "FITRI ALFIANA" in name_values
+    assert "TOKKI" in company_values
+
+
 def test_phone_display_format_wraps_country_code() -> None:
     assert format_phone_for_display("6281236678953", "+62") == "(+62) 81236678953"
     assert format_phone_for_display("81236678953", "+62") == "(+62) 81236678953"

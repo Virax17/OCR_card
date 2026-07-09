@@ -67,6 +67,8 @@ Business-card layout rules learned from local samples:
 - Back sides often contain branch addresses, support facilities, product photos, service outlines, target/safety slogans, and "we sell" lists. Use these for address/category support only unless a missing contact field is clearly printed there.
 - Ignore QR codes, decorative icons, certification icons, product photos, separators, and handwritten notes unless the printed text beside them is part of a contact field.
 - Person name is commonly the largest personal text block, often near the center/right, with designation directly below it.
+- Never use a company/legal entity/brand as the person name. Legal suffixes and business words such as PT, Pvt, Ltd, LLC, Inc, Pte, Tbk, Co, Group, Engineering, Industrial, Services, Trading, Metal, Works, Radiator, Marine, Oil, Gas, or all-caps single-token brands are company clues, not person-name clues.
+- If a line could be both a brand and a name, choose it as Business/company and return name as null unless there is a separate personal-name line near a designation.
 - Designation is a role title such as Director, Procurement Manager, Plant Manager, Sales Engineer, Regional Sales Manager, or Quick Contact Specialist. Do not put company/service text into designation.
 - Business is the company/legal entity/brand, such as PETROSEA, Babcock & Wilcox, TOKKI, PT Kezindo Sejahtera Abadi, PT. AIR SURYA RADIATOR, PT. Mechatechra Triasindo Indonesia, CESCO, or TIMAS SUPLINDO.
 - Email may be preceded by E, Email, Mail, or an envelope icon. It must contain @ and a valid domain.
@@ -177,6 +179,13 @@ SERVICE_RE = re.compile(
     r"\b(design|fabrication|heavy duty|radiator|oil cooler|heat exchanger|shell|tube|pressure vessel|special order|engineering and fabrication)\b",
     re.I,
 )
+LEGAL_ENTITY_RE = re.compile(r"\b(pt|pvt|ltd|llc|inc|llp|pte|tbk|co\.?|corp|corporation|sdn|bhd)\b", re.I)
+COMPANY_IDENTITY_RE = re.compile(
+    r"\b(company|corporation|corp|group|industrial|industries|engineering|fabrication|solutions|"
+    r"technologies|systems|services|enterprise|trading|manufacturing|marine|contractors|"
+    r"supply|supplies|metal|works|radiator|oil|gas|energy|construction|logistics)\b",
+    re.I,
+)
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "yahoo.com",
@@ -201,6 +210,8 @@ HONORIFIC_RE = re.compile(r"^(mr|mrs|ms|mx|dr|prof|ir|eng|drs|haji|hajjah)\.?$",
 def _looks_like_person_name(line: str) -> bool:
     if _has_contact_value(line) or NOISE_RE.search(line) or ADDRESS_RE.search(line) or SERVICE_RE.search(line):
         return False
+    if _looks_like_company_identity(line):
+        return False
     # \w with re.UNICODE (the default in Python 3) matches accented/non-Latin
     # letters too, so names like "Bùi Thị Hoa" or "Müller" aren't silently
     # excluded just because they contain non-ASCII characters.
@@ -216,13 +227,26 @@ def _looks_like_person_name(line: str) -> bool:
     return not any(word.lower() in banned for word in words)
 
 
+def _looks_like_company_identity(line: str | None) -> bool:
+    if not line:
+        return False
+    words = re.findall(r"[A-Za-z0-9&.'-]+", line)
+    if not words:
+        return False
+    if LEGAL_ENTITY_RE.search(line) or COMPANY_IDENTITY_RE.search(line):
+        return True
+    if any(char.isdigit() for char in line) or any(char in line for char in ("&", "/")):
+        return True
+    return len(words) == 1 and words[0].isupper() and len(words[0]) >= 3
+
+
 def _looks_like_business(line: str) -> bool:
     if _has_contact_value(line) or NOISE_RE.search(line) or ADDRESS_RE.search(line):
         return False
     words = re.findall(r"[A-Za-z0-9&.'-]+", line)
     if not words:
         return False
-    if re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", line, re.I):
+    if LEGAL_ENTITY_RE.search(line):
         return True
     if DESIGNATION_RE.search(line):
         return False
@@ -626,6 +650,40 @@ def _drop_unsupported_fields(cleaned: dict, text: str) -> None:
             cleaned[field] = None
 
 
+def _same_identity(left: str | None, right: str | None) -> bool:
+    normalized_left = _normalize_match_text(left)
+    normalized_right = _normalize_match_text(right)
+    return bool(normalized_left and normalized_left == normalized_right)
+
+
+def _repair_name_company_conflict(cleaned: dict, visible_text: str) -> None:
+    name = cleaned.get("name")
+    business = cleaned.get("business")
+    company = cleaned.get("company")
+    if not name:
+        return
+
+    name_is_company = (
+        _same_identity(name, business)
+        or _same_identity(name, company)
+        or _looks_like_company_identity(str(name))
+    )
+    if not name_is_company:
+        return
+
+    if not business and _looks_like_company_identity(str(name)):
+        cleaned["business"] = name
+        cleaned["company"] = cleaned.get("company") or name
+
+    lines = _text_lines(visible_text)
+    _designation, designation_index = _infer_designation(lines)
+    repaired = _infer_name(lines, designation_index)
+    if repaired and not _same_identity(repaired, cleaned.get("business")) and not _same_identity(repaired, cleaned.get("company")):
+        cleaned["name"] = repaired
+    else:
+        cleaned["name"] = None
+
+
 def clean_structured_fields(fields: dict) -> dict:
     cleaned = {field: fields.get(field) for field in FIELDS}
     visible_text = _visible_text(cleaned)
@@ -691,6 +749,7 @@ def clean_structured_fields(fields: dict) -> dict:
     if not cleaned.get("company"):
         cleaned["company"] = cleaned.get("business")
     _drop_unsupported_fields(cleaned, visible_text)
+    _repair_name_company_conflict(cleaned, visible_text)
     if cleaned.get("business") and not cleaned.get("company"):
         cleaned["company"] = cleaned["business"]
     if cleaned.get("company") and not cleaned.get("business"):
@@ -722,6 +781,8 @@ Rules:
 - Every non-null field except category/country_code must be supported by a line in front_text/back_text.
 - Never use service bullet text, marketing slogans, product names, product categories, or "Business Outline" headings as a person name or business name.
 - If the front side contains a person block, name is the person block's name, designation is the line directly under/near that name, and business is the logo/company name.
+- Do not put the company/legal entity/brand into name. A line containing PT/Pvt/Ltd/LLC/Inc/Pte/Tbk/Co, business terms like Engineering/Industrial/Services/Trading/Metal/Works/Radiator/Marine/Oil/Gas, or a single all-caps brand token is company/business, not a person.
+- If no separate personal-name line is visible near a designation, return name as null rather than copying the business/company line.
 - front_text must contain the full transcription of the front side, with lines separated by "\\n".
 - back_text must contain the full transcription of the back side if provided, with lines separated by "\\n"; otherwise null.
 - all_visible_text must combine front_text and back_text.
@@ -778,6 +839,15 @@ Correct extraction: business="ACME INDUSTRIAL SUPPLY PTE LTD" (top brand line), 
 (large personal-name line, not the top brand, immediately above the designation),
 designation="Regional Sales Manager". Do not swap these: the company is the legal-entity/brand
 line even if it isn't the largest text, and the name is a personal-looking line distinct from it.
+
+Negative example — company text must not become the name:
+Annotated OCR lines:
+[front L0 | top | large] TOKKI
+[front L1 | middle | large] FITRI ALFIANA
+[front L2 | middle | normal] Procurement Officer
+Correct extraction: business="TOKKI", name="FITRI ALFIANA", designation="Procurement Officer".
+Wrong extraction: name="TOKKI". A single all-caps brand token is a company/brand unless it is
+clearly printed as a person's personal-name line.
 """.strip()
 
 
@@ -844,6 +914,8 @@ Rules:
 - Contact1, Contact2, and Contact3 must be digits only and include country calling code when visible or inferable.
 - Business/company should be the top brand/company line from the front OCR text. If OCR missed the logo text, return null rather than guessing.
 - Name is a PERSON's name, distinct from the business/company line, even when both appear near the top. A line tagged "large" near the top-middle or middle of the card that reads like a person's name (not a legal entity, not containing Pte/Ltd/PT/Inc/Co) is very likely the name. Do not put the company name into the name field, and do not put a person's name into business/company.
+- A candidate is NOT a person name if it is the same text as Business/company, is a single all-caps brand/acronym, contains legal suffixes (PT/Pvt/Ltd/LLC/Inc/Pte/Tbk/Co), or contains business nouns such as Engineering, Industrial, Services, Trading, Metal, Works, Radiator, Marine, Oil, Gas, Group, Corporation. Put those lines in Business/company or return name=null.
+- If no separate personal-name line is visible near a designation, return name=null. Never copy Business/company into name just to fill the field.
 - Zip_code is ONLY the postal/PIN code printed as part of the address block (a short 4-8 digit code, e.g. a 6-digit Indian PIN or a 5-digit US ZIP). Never take a zip_code value from inside a phone number, mobile number, or fax number — those are longer digit runs typically preceded by phone labels (T/Tel/M/Mob/F/Fax) or a country code, and are not postal codes.
 - Category must be exactly one of:
 {", ".join(BUSINESS_CATEGORIES)}

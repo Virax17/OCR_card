@@ -224,3 +224,51 @@ def test_deterministic_text_structuring_infers_top_brand_and_address() -> None:
     assert "Bekasi" in fields["address"]
     assert fields["zip_code"] == "17156"
     assert fields["website"] == "http://www.ptasr.co.id"
+
+
+def test_cleanup_replaces_company_name_misclassified_as_person_name() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "TOKKI",
+                    "FITRI ALFIANA",
+                    "Procurement Officer",
+                    "+62 877-7190-3337",
+                    "fia@tef.co.id",
+                ]
+            ),
+            "name": "TOKKI",
+            "business": "TOKKI",
+            "designation": "Procurement Officer",
+            "contact1": "+62 877-7190-3337",
+            "email1": "fia@tef.co.id",
+        }
+    )
+
+    assert fields["business"] == "TOKKI"
+    assert fields["company"] == "TOKKI"
+    assert fields["name"] == "FITRI ALFIANA"
+
+
+def test_cleanup_rejects_legal_entity_as_person_name() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "ASR PT. AIR SURYA RADIATOR",
+                    "DESIGN & FABRICATION",
+                    "BUDI SANTOSO",
+                    "Marketing",
+                    "Mobile : 08212307 8763",
+                ]
+            ),
+            "name": "ASR PT. AIR SURYA RADIATOR",
+            "business": "ASR PT. AIR SURYA RADIATOR",
+            "designation": "Marketing",
+            "contact1": "08212307 8763",
+        }
+    )
+
+    assert fields["business"] == "ASR PT. AIR SURYA RADIATOR"
+    assert fields["name"] == "BUDI SANTOSO"

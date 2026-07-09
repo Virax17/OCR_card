@@ -34,17 +34,38 @@ TITLE_KEYWORDS = {
     "procurement",
 }
 COMPANY_KEYWORDS = {
+    "company",
+    "corporation",
+    "corp",
     "pvt",
     "ltd",
     "llc",
     "inc",
     "llp",
+    "pte",
+    "pt",
+    "tbk",
+    "sdn",
+    "bhd",
+    "group",
+    "industrial",
     "industries",
+    "engineering",
+    "fabrication",
     "solutions",
     "technologies",
     "systems",
     "services",
     "enterprise",
+    "trading",
+    "manufacturing",
+    "marine",
+    "contractors",
+    "supply",
+    "supplies",
+    "metal",
+    "works",
+    "radiator",
 }
 ADDRESS_KEYWORDS = {
     "road",
@@ -64,6 +85,7 @@ ADDRESS_KEYWORDS = {
 # A standalone 4-8 digit run on/near an address-flavored line, not embedded in
 # a longer digit run (which would make it part of a phone/fax number).
 ZIP_RE = re.compile(r"(?<!\d)\d{4,8}(?!\d)")
+LEGAL_ENTITY_RE = re.compile(r"\b(pt|pvt|ltd|llc|inc|llp|pte|tbk|co\.?|corp|corporation|sdn|bhd)\b", re.I)
 
 
 def clean_line(line: str) -> str:
@@ -91,6 +113,20 @@ def _phone_field_from_label(label: str) -> str:
     if normalized in {"f", "fax"}:
         return "fax"
     return "phone"
+
+
+def _looks_like_company_identity(line: str) -> bool:
+    words = re.findall(r"[A-Za-z0-9&.'-]+", line)
+    if not words:
+        return False
+    lower_words = {word.strip(".").lower() for word in words}
+    if LEGAL_ENTITY_RE.search(line):
+        return True
+    if lower_words & COMPANY_KEYWORDS:
+        return True
+    if any(char.isdigit() for char in line) or any(char in line for char in ("&", "/")):
+        return True
+    return len(words) == 1 and words[0].isupper() and len(words[0]) >= 3
 
 
 def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
@@ -161,8 +197,10 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
             candidates.append(_candidate("designation", block_line, max(confidence, 0.72), side, "title_keyword"))
         if any(keyword in lower for keyword in COMPANY_KEYWORDS):
             candidates.append(_candidate("company", block_line, max(confidence, 0.72), side, "company_keyword"))
-        if side == "front" and line_index <= 4 and re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower):
+        if side == "front" and line_index <= 4 and LEGAL_ENTITY_RE.search(lower):
             candidates.append(_candidate("company", block_line, max(confidence, 0.82), side, "top_front_company"))
+        if side == "front" and line_index <= 3 and _looks_like_company_identity(block_line):
+            candidates.append(_candidate("company", block_line, max(confidence, 0.78), side, "top_front_brand"))
         if any(keyword in lower for keyword in ADDRESS_KEYWORDS):
             candidates.append(_candidate("address", block_line, max(confidence, 0.68), side, "address_keyword"))
             for zip_match in ZIP_RE.finditer(block_line):
@@ -182,7 +220,7 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
             side == "front"
             and line_index <= 8
             and 0 < len(block_line.split()) <= 5
-            and not re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower)
+            and not _looks_like_company_identity(block_line)
             and not EMAIL_RE.search(block_line)
             and not PHONE_RE.search(block_line)
             and not WEBSITE_RE.search(block_line)

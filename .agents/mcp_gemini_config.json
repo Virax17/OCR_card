@@ -73,7 +73,16 @@
     "company_detection": [
       "The company/business name is usually the top-most stylized logo or brand text on the front side.",
       "The logo may be top-left or top-right and may be graphic/stylized rather than normal OCR body text.",
-      "Do not use branch names, office labels, building names, slogans, service-list headings, address landmarks, or back-side product lists as the company name."
+      "Do not use branch names, office labels, building names, slogans, service-list headings, address landmarks, or back-side product lists as the company name.",
+      "Single all-caps brand/acronym lines such as TOKKI, CESCO, or ASR are company/brand candidates unless a separate person-name context is explicit."
+    ],
+    "name_detection": [
+      "Name must be a real person's name, not the business/company/brand line.",
+      "Never copy Business/company into Name just to fill the field.",
+      "Reject Name candidates that equal Business/company or contain legal/company markers such as PT, Pvt, Ltd, LLC, Inc, Pte, Tbk, Co, Corp, Group, Engineering, Industrial, Services, Trading, Metal, Works, Radiator, Marine, Oil, or Gas.",
+      "Reject single all-caps brand/acronym tokens as names, for example TOKKI, CESCO, PETROSEA, or TIMAS.",
+      "Prefer a person-looking line near/above a designation such as Procurement Officer, Marketing, Director, Sales Engineer, or Regional Sales Manager.",
+      "If no separate personal-name line is visible near a designation, return Name as null rather than using the company."
     ],
     "back_side_handling": [
       "Back sides often contain branch addresses, support facilities, product/service outlines, product photos, safety slogans, and we-sell lists.",
