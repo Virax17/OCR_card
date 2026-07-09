@@ -10,4 +10,4 @@ google-genai
 google-auth
 requests
 pymongo[srv]
-certifi
+certifi>=2024.12.14

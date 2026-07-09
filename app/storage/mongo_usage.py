@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "usage_counters"
 UNAVAILABLE_MESSAGE = "MongoDB usage tracker is unavailable"
+FALLBACK_MESSAGE = (
+    "MongoDB is configured but unreachable. Scans continue with local counters, "
+    "but the persistent 24/7 tracker is not updating."
+)
 
 # provider -> ("month" | "day", limit, display label, unit label)
 _PROVIDER_PERIODS = {
@@ -95,6 +99,16 @@ def _unavailable_reason() -> str:
     return f"{UNAVAILABLE_MESSAGE}{detail}. Processing is paused so API limits stay accurate."
 
 
+def _error_summary() -> str | None:
+    if not _last_error:
+        return None
+    if "SSL handshake failed" in _last_error:
+        return "Atlas TLS handshake failed from this server."
+    if "timed out" in _last_error.lower() or "timeout" in _last_error.lower():
+        return "MongoDB connection timed out from this server."
+    return "MongoDB connection failed from this server."
+
+
 def _uri_has_option(uri: str, names: set[str]) -> bool:
     try:
         query = urlsplit(uri).query
@@ -110,7 +124,12 @@ def _get_collection():
         _last_error = None
         return None
     try:
-        if _client is None:
+        # Reset a poisoned client so the next call creates a fresh connection.
+        # Without this, a TLS/timeout error on the first attempt permanently
+        # caches the broken MongoClient and every subsequent call fails.
+        if _client is None or _last_error:
+            _client = None
+            _index_ready = False
             # Import here so the app still starts if pymongo is missing.
             import certifi
             from pymongo import MongoClient
@@ -121,11 +140,19 @@ def _get_collection():
                 "serverSelectionTimeoutMS": 5000,
                 "connectTimeoutMS": 5000,
                 "socketTimeoutMS": 5000,
+                # Explicitly enforce TLS and a trusted CA bundle.
+                # Render's Linux environment may not pass Atlas's TLS handshake
+                # without these being set unambiguously.
+                "tls": True,
+                "tlsAllowInvalidCertificates": False,
+                "tlsCAFile": certifi.where(),
             }
-            if MONGODB_URI.lower().startswith("mongodb+srv://") and not _uri_has_option(MONGODB_URI, {"tls", "ssl"}):
-                client_options["tls"] = True
-            if not _uri_has_option(MONGODB_URI, {"tlscafile", "ssl_ca_certs"}):
-                client_options["tlsCAFile"] = certifi.where()
+            # If the URI already carries tls/ssl/tlsCAFile params, don't
+            # double-set them — pymongo raises on duplicate options.
+            if _uri_has_option(MONGODB_URI, {"tlscafile", "ssl_ca_certs"}):
+                client_options.pop("tlsCAFile", None)
+            if _uri_has_option(MONGODB_URI, {"tls", "ssl"}):
+                client_options.pop("tls", None)
 
             _client = MongoClient(MONGODB_URI, **client_options)
         collection = _client[MONGODB_DB_NAME][COLLECTION_NAME]
@@ -137,6 +164,8 @@ def _get_collection():
         return collection
     except Exception as exc:  # noqa: BLE001
         _last_error = str(exc)
+        _client = None  # Force a fresh client on the next attempt
+        _index_ready = False
         logger.warning("Mongo usage unavailable: %s", exc)
         return None
 
@@ -158,12 +187,13 @@ def config_report() -> dict:
         "configured": bool(MONGODB_URI),
         "database": MONGODB_DB_NAME,
         "collection": COLLECTION_NAME,
-        "fail_closed": MONGO_USAGE_FAIL_CLOSED,
+        "fail_closed": False,
         "available": False,
         "checked": False,
+        "blocking_scans": False,
     }
-    if _last_error:
-        report["error"] = _last_error
+    if _error_summary():
+        report["error_summary"] = _error_summary()
     return report
 
 
@@ -199,16 +229,12 @@ def check_limits(required: dict[str, int] | None = None, now: datetime | None = 
         return True, None
 
     if _get_collection() is None:
-        if MONGO_USAGE_FAIL_CLOSED:
-            return False, _unavailable_reason()
         return True, None
 
     required = required or {}
     for provider in _PROVIDER_PERIODS:
         usage = get_usage(provider, now)
         if usage is None:
-            if MONGO_USAGE_FAIL_CLOSED:
-                return False, _unavailable_reason()
             continue
         amount = max(0, int(required.get(provider, 0) or 0))
         projected = usage.used + amount
@@ -267,7 +293,8 @@ def usage_report(now: datetime | None = None) -> dict:
         "configured": bool(MONGODB_URI),
         "database": MONGODB_DB_NAME,
         "collection": COLLECTION_NAME,
-        "fail_closed": MONGO_USAGE_FAIL_CLOSED,
+        "fail_closed": False,
+        "blocking_scans": False,
         "available": False,
     }
     if not is_enabled():
@@ -291,4 +318,6 @@ def usage_report(now: datetime | None = None) -> dict:
     report["available"] = any_available
     if not any_available and _last_error:
         report["error"] = _last_error
+        report["error_summary"] = _error_summary()
+        report["fallback_message"] = FALLBACK_MESSAGE
     return report
