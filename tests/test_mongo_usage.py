@@ -1,6 +1,24 @@
 from app.storage import mongo_usage
 
 
+def test_config_report_does_not_connect_to_mongo(monkeypatch) -> None:
+    monkeypatch.setattr(mongo_usage, "MONGO_USAGE_ENABLED", True)
+    monkeypatch.setattr(mongo_usage, "MONGODB_URI", "mongodb://example")
+    monkeypatch.setattr(mongo_usage, "_last_error", None)
+
+    def fail_if_connected():
+        raise AssertionError("config_report must not open a Mongo connection")
+
+    monkeypatch.setattr(mongo_usage, "_get_collection", fail_if_connected)
+
+    report = mongo_usage.config_report()
+
+    assert report["enabled"] is True
+    assert report["configured"] is True
+    assert report["available"] is False
+    assert report["checked"] is False
+
+
 def test_check_limits_allows_when_mongo_not_configured(monkeypatch) -> None:
     monkeypatch.setattr(mongo_usage, "MONGO_USAGE_ENABLED", True)
     monkeypatch.setattr(mongo_usage, "MONGODB_URI", "")

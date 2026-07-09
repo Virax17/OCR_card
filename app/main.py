@@ -68,7 +68,6 @@ async def startup() -> None:
         location="Local",
         notes="Default event",
     )
-    mongo_usage.initialize()
 
 
 @app.get("/")
@@ -103,7 +102,7 @@ async def health() -> dict:
         "gemini_configured": is_gemini_configured(),
         "gemini_key_count": len(gemini_key_labels()),
         "google_vision_configured": is_google_vision_configured(),
-        "mongo_usage": mongo_usage.usage_report(),
+        "mongo_usage": mongo_usage.config_report(),
         "storage_root": str(EVENTS_ROOT),
         "default_event_id": DEFAULT_EVENT_ID,
     }

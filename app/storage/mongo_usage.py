@@ -130,6 +130,27 @@ def initialize() -> bool:
     return _get_collection() is not None
 
 
+def config_report() -> dict:
+    """Mongo tracker configuration for cheap health checks.
+
+    This intentionally avoids opening a MongoDB connection. Render calls
+    ``/health`` during deploys, and a slow Atlas connection should not keep the
+    app from booting.
+    """
+    report: dict[str, Any] = {
+        "enabled": is_enabled(),
+        "configured": bool(MONGODB_URI),
+        "database": MONGODB_DB_NAME,
+        "collection": COLLECTION_NAME,
+        "fail_closed": MONGO_USAGE_FAIL_CLOSED,
+        "available": False,
+        "checked": False,
+    }
+    if _last_error:
+        report["error"] = _last_error
+    return report
+
+
 def get_usage(provider: str, now: datetime | None = None) -> MongoUsage | None:
     """Current-period usage for a provider, or None if tracking is unavailable."""
     spec = _PROVIDER_PERIODS.get(provider)
