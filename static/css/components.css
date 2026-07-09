@@ -1,0 +1,617 @@
+/* Icons */
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Buttons */
+.btn {
+  min-height: 44px;
+  border: 0;
+  border-radius: var(--radius-full);
+  padding: 10px 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: inherit;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  touch-action: manipulation;
+  transition: filter var(--duration) ease, transform 80ms ease, background var(--duration) ease;
+}
+
+.btn:active {
+  transform: scale(.97);
+}
+
+.btn:disabled {
+  opacity: .45;
+  pointer-events: none;
+}
+
+.btn.primary {
+  min-height: 52px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 600;
+  font-size: var(--font-base);
+}
+
+.btn.primary:active {
+  background: var(--teal-dark);
+}
+
+.btn.ghost {
+  background: #1e2a4a;
+  color: #fff;
+}
+
+.btn.outline, .btn.secondary {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+}
+
+.btn.danger {
+  background: #fff;
+  color: var(--danger);
+  border: 1px solid #f3c6c6;
+}
+
+.btn.text-link {
+  min-height: auto;
+  padding: 6px 4px;
+  background: none;
+  color: var(--teal-dark);
+  font-weight: 600;
+}
+
+.btn.block {
+  width: 100%;
+}
+
+.btn.icon-btn {
+  width: var(--touch-min);
+  min-height: var(--touch-min);
+  padding: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+}
+
+.btn.icon-btn:active {
+  background: rgba(20, 33, 61, .08);
+}
+
+.btn-circle {
+  width: 52px;
+  height: 52px;
+  min-height: 52px;
+  border-radius: 50%;
+  background: #eef4f3;
+  color: var(--teal-dark);
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.btn-circle:active {
+  transform: scale(.94);
+  background: #dcece9;
+}
+
+.btn-circle[disabled], .btn-circle.is-hidden {
+  display: none;
+}
+
+/* Focus visibility (desktop keyboard) */
+.btn:focus-visible,
+.chip:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+/* Sheets (dialog-based) */
+dialog.sheet {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 92dvh;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-2);
+  background: var(--panel);
+  color: var(--text);
+}
+
+dialog.sheet[open] {
+  animation: sheet-up var(--duration) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog.sheet[open] {
+    animation: none;
+  }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+dialog.sheet::backdrop {
+  background: rgba(20, 33, 61, .45);
+}
+
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  margin: 10px auto 0;
+  border-radius: var(--radius-full);
+  background: var(--line-strong);
+}
+
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+}
+
+.sheet-header h2 {
+  font-size: var(--font-lg);
+  font-weight: 600;
+}
+
+.sheet-body {
+  padding: 0 var(--space-4) var(--space-5);
+  overflow-y: auto;
+  max-height: calc(92dvh - 60px);
+}
+
+.sheet-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.sheet-footer .btn {
+  flex: 1;
+}
+
+@media (min-width: 1024px) {
+  dialog.sheet {
+    margin: auto;
+    max-width: 560px;
+    border-radius: var(--radius-lg);
+    max-height: 88dvh;
+  }
+
+  dialog.sheet.sheet--drawer {
+    margin: 0 0 0 auto;
+    max-width: 420px;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  dialog.sheet.sheet--drawer .sheet-body {
+    max-height: calc(100dvh - 60px);
+  }
+}
+
+/* Contact card */
+.contact-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(20, 33, 61, .05);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.contact-card:active {
+  transform: scale(.99);
+}
+
+.contact-card-thumb {
+  width: 44px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #eef0f4;
+}
+
+.contact-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-card-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-card-meta {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-card-sub {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-card-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.confidence-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.confidence-dot.high { background: var(--success); }
+.confidence-dot.medium { background: var(--warn); }
+.confidence-dot.low { background: var(--danger); }
+
+.dup-badge {
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .03em;
+}
+
+/* Skeleton */
+.contact-card--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.skeleton-block {
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, #eef0f4 25%, #f6f7fa 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block { animation: none; }
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.contact-card--skeleton .contact-card-thumb {
+  background: none;
+}
+
+.skeleton-line {
+  height: 12px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eef0f4 25%, #f6f7fa 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+.skeleton-line:last-child { margin-bottom: 0; width: 60%; }
+
+/* Chips */
+.chip {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--text-dim);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.chip.active {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+
+.chip-row {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+/* Meter bar */
+.meter {
+  margin-bottom: var(--space-3);
+}
+
+.meter-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: var(--font-sm);
+}
+
+.meter-label .name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.meter-label .value {
+  color: var(--text-dim);
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.meter-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: #eef0f4;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--teal);
+  transition: width var(--duration) ease;
+}
+
+.meter-fill.warning { background: var(--warn); }
+.meter-fill.danger { background: var(--danger); }
+
+/* Usage provider rows (simplified quota status) */
+.provider-row {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.provider-row:last-child {
+  border-bottom: none;
+}
+
+.provider-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 6px;
+}
+
+.provider-row-head .name {
+  font-size: var(--font-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.provider-row-count {
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+}
+
+.provider-row-note {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.provider-row-note.warning { color: #92400e; }
+.provider-row-note.error { color: var(--danger); }
+
+.status-pill {
+  border-radius: var(--radius-full);
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-pill.ok { background: var(--success-bg); color: var(--success); }
+.status-pill.warning { background: var(--warn-bg); color: #92400e; }
+.status-pill.error { background: var(--danger-bg); color: var(--danger); }
+
+/* Toast */
+#toast {
+  position: fixed;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + var(--space-3));
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.toast-item {
+  pointer-events: auto;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  background: var(--ink);
+  color: #fff;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  animation: toast-in var(--duration) ease-out;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.toast-item.success { background: var(--success); }
+.toast-item.error { background: var(--danger); }
+.toast-item.info { background: var(--ink); }
+
+.toast-item button {
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: .8;
+  cursor: pointer;
+  padding: 4px;
+}
+
+@media (min-width: 1024px) {
+  #toast {
+    left: auto;
+    right: var(--space-5);
+    bottom: var(--space-5);
+    width: 340px;
+  }
+}
+
+/* Empty state */
+.empty-card {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--text-dim);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.empty-card strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: var(--font-lg);
+}
+
+/* Field list (record detail) */
+.field-group {
+  margin-bottom: var(--space-5);
+}
+
+.field-group-title {
+  margin-bottom: var(--space-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.field-row {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.field-row:last-child { border-bottom: none; }
+
+.field-row-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.field-row-value {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: var(--font-base);
+  word-break: break-word;
+}
+
+.field-row.is-hidden { display: none; }
+
+.field-row label {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.field-row input, .field-row textarea {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 10px 11px;
+  background: #fff;
+  color: var(--text);
+  width: 100%;
+}
+
+.field-row textarea {
+  min-height: 72px;
+  resize: vertical;
+}

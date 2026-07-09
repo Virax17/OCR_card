@@ -60,10 +60,12 @@ GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT = int(
 GEMINI_DAILY_REQUEST_LIMIT = GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT * GEMINI_PROJECT_COUNT
 GEMINI_MINUTE_REQUEST_LIMIT = GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT * GEMINI_PROJECT_COUNT
 GEMINI_DAILY_TOKEN_LIMIT = GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT * GEMINI_PROJECT_COUNT
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    r"D:\tritorc\caramel-medley-500511-f3-b43018325a04.json",
-)
+# Cloud-friendly credential source: the full service-account JSON as a string
+# (raw JSON or base64-encoded). Preferred on hosts where you cannot place a file.
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+# Local-dev credential source: path to a service-account JSON file on disk.
+# No default path — an unset value fails loudly instead of pointing at a dead path.
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 GOOGLE_VISION_MODEL = os.getenv("GOOGLE_VISION_MODEL", "builtin/weekly")
 GOOGLE_VISION_TIMEOUT_SECONDS = int(os.getenv("GOOGLE_VISION_TIMEOUT_SECONDS", "60"))
 GOOGLE_VISION_MINUTE_REQUEST_LIMIT = int(os.getenv("GOOGLE_VISION_MINUTE_REQUEST_LIMIT", "1800"))

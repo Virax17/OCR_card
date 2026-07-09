@@ -2,189 +2,384 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CardScan LLM</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>CardScan</title>
+    <meta name="theme-color" content="#14213d">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/screens.css">
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand-wrap">
-        <div class="brand-mark">CS</div>
-        <div>
-          <div class="brand">CardScan LLM</div>
-          <div id="health" class="health">Starting...</div>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-house" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></symbol>
+      <symbol id="icon-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></symbol>
+      <symbol id="icon-camera" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="14" r="3.5"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4"/><path d="M16 3v4"/><path d="M3 10h18"/></symbol>
+      <symbol id="icon-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+      <symbol id="icon-phone" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></symbol>
+      <symbol id="icon-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+      <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18"/><path d="M12 3a15 15 0 0 0 0 18"/></symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
+      <symbol id="icon-contact" viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.2"/><path d="M6 20a6 6 0 0 1 12 0"/><rect x="3" y="3" width="18" height="18" rx="3"/></symbol>
+      <symbol id="icon-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.3-6.4L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.3 6.4L3 16"/><path d="M3 21v-5h5"/></symbol>
+      <symbol id="icon-wifi-off" viewBox="0 0 24 24"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.5a10 10 0 0 1 3-2"/><path d="M16 10.5a10 10 0 0 1 3 2"/><path d="M2 8.5a15 15 0 0 1 4.5-3"/><path d="M17.5 5.5A15 15 0 0 1 22 8.5"/><path d="M12 20h.01"/></symbol>
+      <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-9 9"/></symbol>
+      <symbol id="icon-stack" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 13 9 5 9-5"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+      <symbol id="icon-warning" viewBox="0 0 24 24"><path d="M12 3 2 20h20Z"/><path d="M12 10v4"/><path d="M12 17h.01"/></symbol>
+      <symbol id="icon-kebab" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+    </svg>
+
+    <header id="appBar">
+      <div class="app-bar-inner">
+        <div class="brand-wrap">
+          <div class="brand-mark">CS</div>
+          <button id="appBarEvent" type="button" aria-label="Switch event">
+            <span class="name">Select event</span>
+            <svg class="icon" aria-hidden="true"><use href="#icon-chevron-down"/></svg>
+          </button>
+          <nav id="navLinks">
+            <button class="nav-link" data-route="#/home" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg><span>Home</span>
+            </button>
+            <button class="nav-link" data-route="#/records" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg><span>Records</span>
+            </button>
+            <button class="nav-link" id="navLinkScan" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg><span>Scan</span>
+            </button>
+            <button class="nav-link" data-route="#/more" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>More</span>
+            </button>
+          </nav>
         </div>
-      </div>
-      <div class="top-actions">
-        <select id="eventSelect" class="event-select"></select>
-        <button id="newEventBtn" class="btn ghost" type="button">+ New Event</button>
-        <button id="downloadBtn" class="btn primary" type="button">Download Excel</button>
+        <button id="netStatus" type="button">
+          <svg class="icon" aria-hidden="true" style="width:14px;height:14px"><use href="#icon-wifi-off"/></svg>
+          <span id="netStatusText">Offline</span>
+        </button>
       </div>
     </header>
 
-    <main class="layout">
-      <section class="panel controls">
-        <div class="panel-title">
-          <div>
-            <h1>Add Cards</h1>
-            <p class="sub">Upload one card, prepare a batch, or capture from camera.</p>
-          </div>
-          <span class="mode-pill">Vision OCR + Gemini</span>
+    <main class="app-shell-desktop">
+      <!-- S1: Dashboard -->
+      <section class="screen" id="screen-home" data-screen="home">
+        <div id="heroCard" class="hero-card">
+          <div class="skeleton-line" style="width:60%;height:20px"></div>
+          <div class="skeleton-line" style="width:40%;margin-top:8px"></div>
         </div>
 
-        <div class="event-box">
-          <label class="field-label">Selected Event</label>
-          <div id="eventMeta" class="event-meta">No event selected</div>
+        <div class="action-row">
+          <button id="dashScanBtn" class="btn primary block" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg>
+            Scan a card
+          </button>
+          <div class="action-row-secondary">
+            <button id="dashUploadBtn" class="btn outline block" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg>
+              Upload photos
+            </button>
+            <button id="dashExportBtn" class="btn outline block" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>
+              Export Excel
+            </button>
+          </div>
+          <input id="dashUploadInput" type="file" accept="image/*" multiple hidden>
         </div>
 
-        <div class="tabs" role="tablist">
-          <button class="tab-btn active" data-tab="single" type="button">Single</button>
-          <button class="tab-btn" data-tab="bulk" type="button">Bulk Upload</button>
-          <button class="tab-btn" data-tab="camera" type="button">Camera</button>
+        <div id="queueBanner" class="queue-banner" hidden>
+          <span id="queueBannerText">0 scans waiting for network</span>
+          <button id="queueBannerBtn" class="btn primary" type="button" style="min-height:36px;padding:6px 12px;">Process now</button>
         </div>
 
-        <div class="tabpane active" id="tab-single">
-          <label class="field-label">Front Required</label>
-          <div class="file-slot">
-            <div class="file-icon">ID</div>
-            <div class="file-meta">
-              <strong id="frontFileName">No file chosen</strong>
-              <span>JPG, PNG, or WEBP up to the app upload limit</span>
-            </div>
-            <label class="choose">Browse<input id="frontInput" type="file" accept="image/*"></label>
-          </div>
-
-          <label class="field-label">Back Optional</label>
-          <div class="file-slot">
-            <div class="file-icon">ID</div>
-            <div class="file-meta">
-              <strong id="backFileName">No file chosen</strong>
-              <span>Use when contact details continue on side two</span>
-            </div>
-            <label class="choose">Browse<input id="backInput" type="file" accept="image/*"></label>
-          </div>
+        <div class="section-header">
+          <span class="section-label">Recent captures</span>
+          <button class="section-link" data-route="#/records" type="button">View all &rarr;</button>
         </div>
+        <div id="recentList" class="recent-list"></div>
 
-        <div class="tabpane" id="tab-bulk">
-          <div class="dropzone" id="dropzone">
-            <div class="drop-icon">UP</div>
-            <strong>Drag and drop multiple card images</strong>
-            <span>Each image is processed as one front-only business card.</span>
-            <input id="bulkInput" type="file" multiple accept="image/*">
-          </div>
-          <button id="confirmBulkBtn" class="btn outline process-btn" type="button" disabled>Confirm Bulk Selection</button>
-          <div id="bulkQueue" class="queue-list"></div>
-        </div>
-
-        <div class="tabpane" id="tab-camera">
-          <div class="camera-box" id="cameraBox">
-            <div class="camera-placeholder" id="cameraPlaceholder">
-              Camera preview will appear here when camera capture is wired.
-            </div>
-          </div>
-          <div class="camera-controls">
-            <button id="enableCamBtn" class="btn outline" type="button">Enable Camera</button>
-            <button id="shutterBtn" class="shutter" type="button" aria-label="Capture card" hidden></button>
-          </div>
-          <div id="cameraQueue" class="queue-list"></div>
-        </div>
-
-        <button id="processBtn" class="btn primary process-btn" type="button">Process Card</button>
-        <button id="resetBtn" class="btn danger process-btn" type="button">Start New File</button>
-        <div id="message" class="message"></div>
-
-        <div class="progress-panel" id="progressPanel" hidden>
-          <div class="progress-head">
-            <h3 id="progressTitle">Processing Queue</h3>
-            <span id="progressPercent">0%</span>
-          </div>
-          <div class="progress-bar-track"><div class="progress-bar-fill" id="progressFill"></div></div>
-          <div id="ticketList"></div>
-        </div>
-
-        <div class="usage-box">
-          <div class="usage-title">API Usage</div>
-          <div id="llmUsage" class="usage-metrics">Loading...</div>
+        <div id="usageCard" class="usage-card">
+          <div class="section-label" style="margin-bottom:10px;">API usage</div>
+          <div id="usageMeters">Loading...</div>
         </div>
       </section>
 
-      <section class="panel records">
-        <div class="records-head">
-          <div>
-            <h2>Event Records</h2>
-            <div id="recordSummary" class="record-summary">Loading records...</div>
-          </div>
-          <div class="records-actions">
-            <button id="refreshBtn" class="btn outline" type="button">Refresh</button>
-            <button id="downloadBtnInline" class="btn primary" type="button">Download Excel</button>
-          </div>
+      <!-- S3: Records -->
+      <section class="screen" id="screen-records" data-screen="records">
+        <div class="screen-title-row">
+          <h1>Records <span id="recordsCountBadge" class="count-badge"></span></h1>
+          <button id="recordsMenuBtn" class="btn icon-btn" type="button" aria-label="Records menu">
+            <svg class="icon" aria-hidden="true"><use href="#icon-kebab"/></svg>
+          </button>
         </div>
-        <div class="table-wrap">
-          <table>
+        <div class="records-search-row">
+          <svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg>
+          <input id="recordSearch" type="search" placeholder="Search name, company, email, phone" aria-label="Search records">
+        </div>
+        <div class="chip-row" role="group" aria-label="Record filters">
+          <button class="chip active" data-filter="all" type="button">All</button>
+          <button class="chip" data-filter="duplicates" type="button">Duplicates</button>
+          <button class="chip" data-filter="low" type="button">Low confidence</button>
+        </div>
+
+        <div id="recordsEmptyState"></div>
+        <div id="recordsList" class="records-list"></div>
+
+        <div id="recordsTableWrap" class="records-table-wrap">
+          <table class="records-table">
+            <colgroup>
+              <col class="col-card"><col><col><col><col><col><col class="col-confidence">
+            </colgroup>
             <thead>
               <tr>
-                <th>Card</th>
-                <th>Name</th>
-                <th>Business</th>
-                <th>Category</th>
-                <th>Contact1</th>
-                <th>Contact2</th>
-                <th>Contact3</th>
-                <th>Email1</th>
-                <th>Confidence</th>
-                <th>Duplicate</th>
-                <th></th>
+                <th>Card</th><th>Name</th><th>Company</th><th>Category</th><th>Phone</th><th>Email</th><th>Confidence</th>
               </tr>
             </thead>
-            <tbody id="recordsBody"></tbody>
+            <tbody id="recordsTableBody"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- S6: More -->
+      <section class="screen" id="screen-more" data-screen="more">
+        <div class="screen-title-row"><h1>More</h1></div>
+
+        <div class="more-section">
+          <h2>Offline queue</h2>
+          <div id="moreQueueList"></div>
+          <button id="moreProcessQueueBtn" class="btn outline block" type="button" style="margin-top:var(--space-2)">Process all now</button>
+        </div>
+
+        <div class="more-section">
+          <h2>API usage</h2>
+          <div id="moreUsageMeters" class="usage-card">Loading...</div>
+        </div>
+
+        <div class="more-section">
+          <h2>Data</h2>
+          <button id="moreExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">Export Excel (current event)</button>
+          <button id="moreResetBtn" class="btn danger block" type="button">Reset event data&hellip;</button>
+        </div>
+
+        <div class="more-section">
+          <h2>System</h2>
+          <div id="healthList" class="health-list">Loading...</div>
+          <button id="installAppBtn" class="btn outline block" type="button" style="margin-top:var(--space-3)" hidden>Install app</button>
         </div>
       </section>
     </main>
 
-    <dialog id="editDialog">
-      <form method="dialog" id="editForm">
-        <h2>Edit Record</h2>
-        <input type="hidden" id="editCardId">
-        <label>Name<input id="editName"></label>
-        <label>Designation<input id="editDesignation"></label>
-        <label>Company<input id="editCompany"></label>
-        <label>Business<input id="editBusiness"></label>
-        <label>Email1<input id="editEmail1"></label>
-        <label>Email2<input id="editEmail2"></label>
-        <label>Contact1<input id="editContact1"></label>
-        <label>Contact2<input id="editContact2"></label>
-        <label>Contact3<input id="editContact3"></label>
-        <label>Website<input id="editWebsite"></label>
-        <label>Social Media<input id="editSocialMedia"></label>
-        <label>Notes<textarea id="editNotes"></textarea></label>
-        <label>Address<textarea id="editAddress"></textarea></label>
-        <label>Category<input id="editCategory"></label>
-        <div class="dialog-actions">
-          <button class="btn outline" value="cancel" type="button" onclick="document.getElementById('editDialog').close()">Cancel</button>
-          <button id="saveEditBtn" class="btn primary" value="default">Save</button>
+    <!-- S2: Scan (full-screen overlay) -->
+    <section id="scanScreen" data-screen="scan">
+      <div class="scan-modal-panel">
+        <div class="scan-topbar">
+          <button id="scanCloseBtn" class="btn icon-btn" type="button" aria-label="Close scan" style="color:#fff">
+            <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+          </button>
+          <h2>Scan card</h2>
+          <span style="width:48px"></span>
         </div>
-      </form>
+
+        <div class="scan-viewfinder">
+          <video id="scanVideo" autoplay playsinline muted></video>
+          <canvas id="scanCanvas" hidden></canvas>
+          <div class="scan-guide-wrap">
+            <div class="scan-guide-frame"></div>
+            <div class="scan-guide-caption">Align card inside the frame</div>
+          </div>
+          <img id="scanFrozenFrame" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+
+          <div id="scanFallback">
+            <svg class="icon" aria-hidden="true" style="width:40px;height:40px"><use href="#icon-camera"/></svg>
+            <p>Camera access was denied or is unavailable. You can still import photos from your gallery.</p>
+            <button id="scanFallbackGalleryBtn" class="btn primary" type="button">Choose from gallery</button>
+          </div>
+
+          <div id="scanReviewSheet">
+            <div class="review-actions">
+              <button id="reviewRetakeBtn" class="btn ghost" type="button">Retake</button>
+              <button id="reviewAddBackBtn" class="btn outline" type="button">Add back side</button>
+            </div>
+            <button id="reviewUsePhotoBtn" class="btn primary block" type="button">Use photo</button>
+          </div>
+        </div>
+
+        <div class="side-toggle" id="sideToggle">
+          <button class="active" data-side="front" type="button">Front</button>
+          <button data-side="back" type="button">Back</button>
+        </div>
+
+        <div id="scanStatusStrip">Idle</div>
+        <div id="batchTray" class="batch-tray"></div>
+
+        <div class="scan-controls">
+          <button id="scanGalleryBtn" class="side-btn" type="button" aria-label="Import from gallery">
+            <svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg>
+          </button>
+          <button id="shutterBtn" type="button" aria-label="Capture card"></button>
+          <div style="position:relative;">
+            <button id="batchToggle" class="side-btn" type="button" aria-label="Toggle batch mode">
+              <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg>
+              <span id="batchCount" class="badge-count">0</span>
+            </button>
+            <button id="batchDoneBtn" type="button">Done (0)</button>
+          </div>
+        </div>
+        <input id="scanGalleryInput" type="file" accept="image/*" multiple hidden>
+      </div>
+    </section>
+
+    <!-- Bottom nav -->
+    <nav id="bottomNav">
+      <button class="nav-item active" id="navHome" data-route="#/home" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg><span>Home</span>
+      </button>
+      <button class="nav-item" id="navRecords" data-route="#/records" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg><span>Records</span>
+      </button>
+      <div class="nav-item nav-fab-slot">
+        <button id="navScanFab" type="button" aria-label="Scan a card">
+          <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg>
+        </button>
+      </div>
+      <button class="nav-item" id="navEvents" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>Events</span>
+      </button>
+      <button class="nav-item" id="navMore" data-route="#/more" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>More</span>
+      </button>
+    </nav>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <!-- S4: Record detail / edit sheet -->
+    <dialog id="recordSheet" class="sheet sheet--drawer">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h2 id="recordSheetTitle">Record</h2>
+        <div style="display:flex;gap:6px;">
+          <button id="recordEditToggleBtn" class="btn icon-btn" type="button" aria-label="Edit record">
+            <svg class="icon" aria-hidden="true"><use href="#icon-edit"/></svg>
+          </button>
+          <button id="recordSheetCloseBtn" class="btn icon-btn" type="button" aria-label="Close">
+            <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="sheet-body">
+        <img id="recordSheetImage" class="record-sheet-header-img" alt="Business card front">
+        <div style="margin-top:var(--space-3)">
+          <div id="recordSheetName" style="font-size:var(--font-xl);font-weight:700;"></div>
+          <div id="recordSheetSubtitle" style="color:var(--text-dim);font-size:var(--font-sm);margin-top:2px;"></div>
+        </div>
+        <div id="recordDupBanner" class="dup-banner">
+          <svg class="icon" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px"><use href="#icon-warning"/></svg>
+          Possible duplicate contact
+        </div>
+
+        <div class="quick-actions-row">
+          <a id="qaCall" class="quick-action" href="#" hidden>
+            <span class="btn-circle"><svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg></span>
+            Call
+          </a>
+          <a id="qaEmail" class="quick-action" href="#" hidden>
+            <span class="btn-circle"><svg class="icon" aria-hidden="true"><use href="#icon-mail"/></svg></span>
+            Email
+          </a>
+          <a id="qaWebsite" class="quick-action" href="#" target="_blank" rel="noopener" hidden>
+            <span class="btn-circle"><svg class="icon" aria-hidden="true"><use href="#icon-globe"/></svg></span>
+            Website
+          </a>
+          <button id="qaSaveContact" class="quick-action" type="button">
+            <span class="btn-circle"><svg class="icon" aria-hidden="true"><use href="#icon-contact"/></svg></span>
+            Save contact
+          </button>
+        </div>
+
+        <div id="recordViewMode"></div>
+        <form id="recordEditForm" hidden>
+          <div id="recordEditFields"></div>
+        </form>
+      </div>
+      <div class="sheet-footer" id="recordSheetFooter" hidden>
+        <button id="recordEditCancelBtn" class="btn outline" type="button">Cancel</button>
+        <button id="recordEditSaveBtn" class="btn primary" type="button">Save</button>
+      </div>
     </dialog>
 
-    <dialog id="eventDialog">
-      <form method="dialog" id="eventForm">
-        <h2>Create Event</h2>
-        <label>Event Name<input id="eventName" required placeholder="APAC Visit"></label>
-        <label>Date<input id="eventDate" type="date" required></label>
-        <label>Location<input id="eventLocation" placeholder="Singapore, Malaysia, Indonesia"></label>
-        <div class="dialog-actions">
-          <button class="btn outline" value="cancel" type="button" onclick="document.getElementById('eventDialog').close()">Cancel</button>
-          <button id="saveEventBtn" class="btn primary" value="default">Create</button>
-        </div>
-      </form>
+    <!-- S5: Event switcher / create sheet -->
+    <dialog id="eventSheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h2>Switch event</h2>
+        <button id="eventSheetCloseBtn" class="btn icon-btn" type="button" aria-label="Close">
+          <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <div id="eventList"></div>
+        <button id="eventNewBtn" class="btn outline block" type="button" style="margin-top:var(--space-3)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg>
+          New event
+        </button>
+        <form id="eventCreateForm">
+          <label>Event name<input id="eventName" required placeholder="APAC Visit"></label>
+          <label>Date<input id="eventDate" type="date" required></label>
+          <label>Location<input id="eventLocation" placeholder="Singapore, Malaysia, Indonesia"></label>
+          <div style="display:flex;gap:var(--space-2);">
+            <button id="eventCreateCancelBtn" class="btn outline" type="button" style="flex:1">Cancel</button>
+            <button id="eventCreateSaveBtn" class="btn primary" type="submit" style="flex:1">Create</button>
+          </div>
+        </form>
+      </div>
     </dialog>
 
+    <!-- Records overflow menu (kebab) -->
+    <dialog id="recordsMenuSheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-body" style="padding-top:var(--space-3)">
+        <button id="menuRefreshBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg> Refresh
+        </button>
+        <button id="menuExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg> Export Excel
+        </button>
+        <button id="menuResetBtn" class="btn danger block" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg> Reset event data&hellip;
+        </button>
+      </div>
+    </dialog>
+
+    <!-- Reset confirmation -->
+    <dialog id="resetConfirmSheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header"><h2>Reset event data</h2></div>
+      <div class="sheet-body">
+        <p style="color:var(--text-dim);font-size:var(--font-sm)">This permanently deletes all records, images, OCR text, and exports for this event. Type the event name to confirm.</p>
+        <p id="resetConfirmEventName" style="font-weight:700;margin:var(--space-2) 0"></p>
+        <input id="resetConfirmInput" type="text" placeholder="Type event name" style="width:100%;min-height:var(--touch-min);border:1px solid var(--line-strong);border-radius:var(--radius);padding:0 var(--space-3);">
+      </div>
+      <div class="sheet-footer">
+        <button id="resetConfirmCancelBtn" class="btn outline" type="button">Cancel</button>
+        <button id="resetConfirmDeleteBtn" class="btn danger" type="button" disabled>Delete everything</button>
+      </div>
+    </dialog>
+
+    <!-- Full image viewer -->
     <dialog id="imageDialog" class="image-dialog">
-      <button id="closeImageBtn" class="modal-close" type="button">Close</button>
+      <button id="closeImageBtn" class="btn icon-btn modal-close" type="button" aria-label="Close image" style="background:rgba(255,255,255,.15);color:#fff">
+        <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+      </button>
       <img id="fullCardImage" alt="Business card full preview">
     </dialog>
 
-    <script src="/static/upload.js"></script>
+    <script type="module" src="/static/js/app-shell.js"></script>
   </body>
 </html>

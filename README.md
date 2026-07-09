@@ -62,6 +62,37 @@ Open:
 http://127.0.0.1:8022
 ```
 
+## Mobile PWA / Deployment Note
+
+The UI is a mobile-first installable PWA (bottom nav, full-screen scan viewfinder, offline capture queue). Camera access (`getUserMedia`) and the service worker only work over **HTTPS or `localhost`**. If the team accesses the app over a LAN IP at a trade show, terminate TLS in front of it (e.g. a Caddy/nginx reverse proxy with a self-signed cert, or a Tailscale HTTPS certificate) — plain `http://<lan-ip>:port` will not allow camera capture or installation on phones.
+
+## Deploy Free on Render
+
+The app deploys to [Render](https://render.com)'s free tier with no database server and no persistent disk. It ships a `render.yaml` blueprint and a `runtime.txt` (Python 3.12).
+
+**Steps**
+
+1. Push this repo to GitHub. `.env`, `events/`, `venv/`, `.cache/`, and `data/` are gitignored, so no secrets or local data are committed.
+2. On Render: **New → Web Service** (or **New → Blueprint** to use `render.yaml`), and connect the GitHub repo. Render auto-detects Python and uses:
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+3. In the service's **Environment** settings, add the secrets (all marked `sync: false` in the blueprint, so you enter them in the dashboard):
+   - `GEMINI_API_KEY` (plus `GEMINI_API_KEY_2` … `_6` for extra daily quota).
+   - `GOOGLE_CREDENTIALS_JSON` — paste the **entire** service-account JSON as a single value (raw JSON or base64). This replaces the on-disk key file; no file needs to be uploaded. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset on Render.
+   - `EVENTS_ROOT` is set to `/tmp/events` by the blueprint (ephemeral scratch dir).
+4. Deploy. The public URL is `https://<name>.onrender.com` — HTTPS is automatic, so camera capture and PWA install work out of the box.
+
+**Free-tier tradeoffs (by design here)**
+
+- **Ephemeral storage:** scanned images, the per-event SQLite databases, and Excel exports are stored on the instance's temp disk and **reset on every restart/redeploy and after ~15 minutes of inactivity**. There is no external database. **Download the Excel export before you leave** — treat each sitting as one session.
+- **Cold starts:** the free service spins down after ~15 min idle; the next request takes ~1 minute to wake it.
+
+If you later need data to survive restarts, that requires a paid tier with a persistent disk or an external store — out of scope for the free setup.
+
+### Portable / other hosts
+
+The same start command works on any container or Python host (Koyeb, Fly, a VPS, etc.). Set the same env vars. For Docker-based hosts, add a small `Dockerfile` that installs `requirements.txt` and runs the uvicorn start command on `$PORT`.
+
 ## Events And Exports
 
 - Create an event from the UI.

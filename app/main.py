@@ -77,6 +77,22 @@ async def index() -> FileResponse:
     return FileResponse(index_path)
 
 
+@app.get("/manifest.webmanifest")
+async def manifest() -> FileResponse:
+    manifest_path = STATIC_DIR / "manifest.webmanifest"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="Manifest is not available")
+    return FileResponse(manifest_path, media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def service_worker() -> FileResponse:
+    sw_path = STATIC_DIR / "sw.js"
+    if not sw_path.exists():
+        raise HTTPException(status_code=404, detail="Service worker is not available")
+    return FileResponse(sw_path, media_type="application/javascript")
+
+
 @app.get("/health")
 async def health() -> dict:
     return {

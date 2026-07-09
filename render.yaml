@@ -1,0 +1,38 @@
+# Render Blueprint — free web service for the CardScan OCR PWA.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Free tier notes:
+#   - Ephemeral filesystem: scanned images, per-event SQLite, and Excel exports
+#     reset on every restart/redeploy and after ~15 min of inactivity. This is
+#     expected for this app — download the Excel export before leaving.
+#   - The service spins down after 15 min idle; the next request cold-starts (~1 min).
+#   - HTTPS is automatic on *.onrender.com (required for camera + PWA install).
+services:
+  - type: web
+    name: cardscan-ocr
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Ephemeral scratch dir for per-event data (SQLite + images + exports).
+      - key: EVENTS_ROOT
+        value: /tmp/events
+      # Full service-account JSON for Google Vision OCR (raw JSON or base64).
+      # Set this in the Render dashboard — never commit the key.
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      # Gemini API keys (at least one required). Add _2../_6 for extra quota.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+      - key: GEMINI_API_KEY_5
+        sync: false
+      - key: GEMINI_API_KEY_6
+        sync: false

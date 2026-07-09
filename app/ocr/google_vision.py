@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -9,7 +11,12 @@ import requests
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
-from app.config import GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_VISION_MODEL, GOOGLE_VISION_TIMEOUT_SECONDS
+from app.config import (
+    GOOGLE_APPLICATION_CREDENTIALS,
+    GOOGLE_CREDENTIALS_JSON,
+    GOOGLE_VISION_MODEL,
+    GOOGLE_VISION_TIMEOUT_SECONDS,
+)
 from app.llm.usage_monitor import record_usage
 from app.models import OCRSideResult, OCRTextBlock
 
@@ -18,14 +25,37 @@ VISION_SCOPES = ["https://www.googleapis.com/auth/cloud-vision"]
 
 
 def is_google_vision_configured() -> bool:
+    if GOOGLE_CREDENTIALS_JSON:
+        return True
     return bool(GOOGLE_APPLICATION_CREDENTIALS) and Path(GOOGLE_APPLICATION_CREDENTIALS).exists()
 
 
-def _access_token() -> str:
-    credentials = service_account.Credentials.from_service_account_file(
+def _parse_credentials_json(raw: str) -> dict[str, Any]:
+    """Accept the service-account JSON either as raw JSON or base64-encoded JSON."""
+    text = raw.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    try:
+        decoded = base64.b64decode(text).decode("utf-8")
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("GOOGLE_CREDENTIALS_JSON is not valid JSON or base64-encoded JSON") from exc
+    return json.loads(decoded)
+
+
+def _load_credentials() -> service_account.Credentials:
+    if GOOGLE_CREDENTIALS_JSON:
+        info = _parse_credentials_json(GOOGLE_CREDENTIALS_JSON)
+        return service_account.Credentials.from_service_account_info(info, scopes=VISION_SCOPES)
+    return service_account.Credentials.from_service_account_file(
         GOOGLE_APPLICATION_CREDENTIALS,
         scopes=VISION_SCOPES,
     )
+
+
+def _access_token() -> str:
+    credentials = _load_credentials()
     credentials.refresh(Request())
     return credentials.token
 
