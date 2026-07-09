@@ -14,6 +14,7 @@ from google.oauth2 import service_account
 from app.config import (
     GOOGLE_APPLICATION_CREDENTIALS,
     GOOGLE_CREDENTIALS_JSON,
+    GOOGLE_VISION_LANGUAGE_HINTS,
     GOOGLE_VISION_MODEL,
     GOOGLE_VISION_TIMEOUT_SECONDS,
 )
@@ -84,7 +85,95 @@ def _average_confidence(annotation: dict[str, Any]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
+def _bbox_height(bbox: list[dict[str, int]]) -> float:
+    ys = [point["y"] for point in bbox if "y" in point]
+    return float(max(ys) - min(ys)) if len(ys) >= 2 else 0.0
+
+
+def _position_band(bbox: list[dict[str, int]], page_height: float) -> str | None:
+    if not bbox or not page_height:
+        return None
+    ys = [point["y"] for point in bbox if "y" in point]
+    if not ys:
+        return None
+    center = sum(ys) / len(ys)
+    ratio = center / page_height
+    if ratio < 0.33:
+        return "top"
+    if ratio > 0.66:
+        return "bottom"
+    return "middle"
+
+
+def _structured_lines(annotation: dict[str, Any], side: str, average_confidence: float) -> list[OCRTextBlock]:
+    """Extract lines with real bbox/height from Vision's paragraph structure.
+
+    This is the layout-aware path: it preserves position and relative text
+    size so downstream name/company disambiguation isn't limited to reading
+    order alone (a card's largest text is usually the person's name or the
+    company/brand, and that signal is otherwise lost if we only split on
+    newlines).
+    """
+    raw_lines: list[tuple[str, float, list[dict[str, int]], float]] = []  # text, confidence, bbox, height
+    page_height = 0.0
+    for page in annotation.get("pages", []):
+        page_height = max(page_height, float(page.get("height", 0) or 0))
+        for block in page.get("blocks", []):
+            for paragraph in block.get("paragraphs", []):
+                words = []
+                confidences = []
+                bbox: list[dict[str, int]] = []
+                for word in paragraph.get("words", []):
+                    text = "".join(symbol.get("text", "") for symbol in word.get("symbols", []))
+                    if text:
+                        words.append(text)
+                    if "confidence" in word:
+                        confidences.append(float(word["confidence"]))
+                    word_bbox = _bbox((word.get("boundingBox") or {}).get("vertices"))
+                    if word_bbox:
+                        bbox = bbox + word_bbox if bbox else word_bbox
+                line = " ".join(words).strip()
+                if not line:
+                    continue
+                confidence = round(sum(confidences) / len(confidences), 4) if confidences else average_confidence
+                raw_lines.append((line, confidence, bbox, _bbox_height(bbox)))
+
+    if not raw_lines:
+        return []
+
+    heights = sorted(height for *_rest, height in raw_lines if height > 0)
+    median_height = heights[len(heights) // 2] if heights else 0.0
+
+    blocks: list[OCRTextBlock] = []
+    for line_index, (text, confidence, bbox, height) in enumerate(raw_lines):
+        size_tag = None
+        if median_height > 0 and height > 0:
+            ratio = height / median_height
+            size_tag = "large" if ratio >= 1.4 else "small" if ratio <= 0.7 else "normal"
+        blocks.append(
+            OCRTextBlock(
+                text=text,
+                confidence=confidence,
+                bbox=bbox,
+                side=side,
+                line_index=line_index,
+                engine="google_vision",
+                variant="document_text_detection",
+                normalized_text=" ".join(text.lower().split()),
+                size_tag=size_tag,
+                position_band=_position_band(bbox, page_height),
+            )
+        )
+    return blocks
+
+
 def _line_blocks(annotation: dict[str, Any], raw_text: str, side: str, average_confidence: float) -> list[OCRTextBlock]:
+    structured = _structured_lines(annotation, side, average_confidence)
+    if structured:
+        return structured
+
+    # Fallback for responses without paragraph/word structure: split on
+    # newlines with no bbox/size signal (still better than nothing).
     blocks: list[OCRTextBlock] = []
     line_index = 0
     for line in raw_text.splitlines():
@@ -103,40 +192,6 @@ def _line_blocks(annotation: dict[str, Any], raw_text: str, side: str, average_c
             )
         )
         line_index += 1
-    if blocks:
-        return blocks
-
-    for page in annotation.get("pages", []):
-        for block in page.get("blocks", []):
-            for paragraph in block.get("paragraphs", []):
-                words = []
-                confidences = []
-                bbox = []
-                for word in paragraph.get("words", []):
-                    text = "".join(symbol.get("text", "") for symbol in word.get("symbols", []))
-                    if text:
-                        words.append(text)
-                    if "confidence" in word:
-                        confidences.append(float(word["confidence"]))
-                    if not bbox:
-                        bbox = _bbox((word.get("boundingBox") or {}).get("vertices"))
-                line = " ".join(words).strip()
-                if not line:
-                    continue
-                confidence = round(sum(confidences) / len(confidences), 4) if confidences else average_confidence
-                blocks.append(
-                    OCRTextBlock(
-                        text=line,
-                        confidence=confidence,
-                        bbox=bbox,
-                        side=side,
-                        line_index=line_index,
-                        engine="google_vision",
-                        variant="document_text_detection",
-                        normalized_text=" ".join(line.lower().split()),
-                    )
-                )
-                line_index += 1
     return blocks
 
 
@@ -144,19 +199,18 @@ def extract_text(image_bytes: bytes, side: str, event_id: str | None = None) -> 
     started = time.perf_counter()
     try:
         token = _access_token()
-        payload = {
-            "requests": [
+        request: dict[str, Any] = {
+            "image": {"content": base64.b64encode(image_bytes).decode("ascii")},
+            "features": [
                 {
-                    "image": {"content": base64.b64encode(image_bytes).decode("ascii")},
-                    "features": [
-                        {
-                            "type": "DOCUMENT_TEXT_DETECTION",
-                            "model": GOOGLE_VISION_MODEL,
-                        }
-                    ],
+                    "type": "DOCUMENT_TEXT_DETECTION",
+                    "model": GOOGLE_VISION_MODEL,
                 }
-            ]
+            ],
         }
+        if GOOGLE_VISION_LANGUAGE_HINTS:
+            request["imageContext"] = {"languageHints": GOOGLE_VISION_LANGUAGE_HINTS}
+        payload = {"requests": [request]}
         response = requests.post(
             VISION_ENDPOINT,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},

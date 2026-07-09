@@ -198,9 +198,13 @@
 
           <div id="scanFallback">
             <svg class="icon" aria-hidden="true" style="width:40px;height:40px"><use href="#icon-camera"/></svg>
-            <p>Camera access was denied or is unavailable. You can still import photos from your gallery.</p>
+            <p id="scanFallbackMsg">Camera access was denied or is unavailable. You can still import photos from your gallery.</p>
             <button id="scanFallbackGalleryBtn" class="btn primary" type="button">Choose from gallery</button>
           </div>
+
+          <button id="scanPlayBtn" class="btn primary" type="button" hidden style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;">
+            Tap to start camera
+          </button>
 
           <div id="scanReviewSheet">
             <div class="review-actions">

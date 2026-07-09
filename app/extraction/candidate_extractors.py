@@ -61,6 +61,9 @@ ADDRESS_KEYWORDS = {
     "pin",
     "zip",
 }
+# A standalone 4-8 digit run on/near an address-flavored line, not embedded in
+# a longer digit run (which would make it part of a phone/fax number).
+ZIP_RE = re.compile(r"(?<!\d)\d{4,8}(?!\d)")
 
 
 def clean_line(line: str) -> str:
@@ -92,21 +95,21 @@ def _phone_field_from_label(label: str) -> str:
 
 def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
     candidates: list[FieldCandidate] = []
-    all_lines: list[tuple[str, str, float, int]] = []
+    all_lines: list[tuple[str, str, float, int, str | None]] = []
     for result in results:
         for block in result.blocks:
             line = clean_line(block.text)
             if line:
-                all_lines.append((line, result.side, block.confidence, block.line_index))
+                all_lines.append((line, result.side, block.confidence, block.line_index, block.size_tag))
 
-    joined = "\n".join(line for line, _, _, _ in all_lines)
+    joined = "\n".join(line for line, *_rest in all_lines)
     emails = sorted(set(EMAIL_RE.findall(joined) + EMAIL_RE.findall(email_search_text(joined))))
     email_domains = {email.split("@", 1)[1].lower() for email in emails if "@" in email}
     for email in emails:
         candidates.append(_candidate("email", email, 0.95, "rule", "email_regex"))
 
     labeled_numbers: set[str] = set()
-    for line, side, confidence, _ in all_lines:
+    for line, side, confidence, _line_index, _size_tag in all_lines:
         if re.search(r"\b(iso|asme|certified|ohsas|sk3|lrga|wqa|ykan|htri)\b", line.lower()):
             continue
         match = LABELED_PHONE_RE.match(line)
@@ -152,26 +155,44 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
             continue
         candidates.append(_candidate("website", website, 0.8, "rule", "website_regex"))
 
-    for line, side, confidence, line_index in all_lines:
-        lower = line.lower()
+    for block_line, side, confidence, line_index, size_tag in all_lines:
+        lower = block_line.lower()
         if any(keyword in lower for keyword in TITLE_KEYWORDS):
-            candidates.append(_candidate("designation", line, max(confidence, 0.72), side, "title_keyword"))
+            candidates.append(_candidate("designation", block_line, max(confidence, 0.72), side, "title_keyword"))
         if any(keyword in lower for keyword in COMPANY_KEYWORDS):
-            candidates.append(_candidate("company", line, max(confidence, 0.72), side, "company_keyword"))
+            candidates.append(_candidate("company", block_line, max(confidence, 0.72), side, "company_keyword"))
         if side == "front" and line_index <= 4 and re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower):
-            candidates.append(_candidate("company", line, max(confidence, 0.82), side, "top_front_company"))
+            candidates.append(_candidate("company", block_line, max(confidence, 0.82), side, "top_front_company"))
         if any(keyword in lower for keyword in ADDRESS_KEYWORDS):
-            candidates.append(_candidate("address", line, max(confidence, 0.68), side, "address_keyword"))
+            candidates.append(_candidate("address", block_line, max(confidence, 0.68), side, "address_keyword"))
+            for zip_match in ZIP_RE.finditer(block_line):
+                digits = zip_match.group(0)
+                # Skip anything that reads as (part of) a phone number: those
+                # lines carry a phone label or the OCR line also matches the
+                # phone regex, which a genuine standalone postal code won't.
+                if PHONE_RE.search(block_line) or re.search(r"\b(t|tel|telp|phone|m|mob|mobile|f|fax)\b", lower):
+                    continue
+                if 4 <= len(digits) <= 8:
+                    candidates.append(_candidate("zip", digits, max(confidence, 0.7), side, "address_line_digits"))
+        # Widened from the first 5 lines / 2-4 words: names are sometimes
+        # lower on the card (below a logo/tagline) or a single/five-word name,
+        # so scan more of the front and allow 1-5 words to actually produce a
+        # hint for both Gemini and the deterministic fallback.
         if (
             side == "front"
-            and line_index <= 4
-            and 1 < len(line.split()) <= 4
+            and line_index <= 8
+            and 0 < len(block_line.split()) <= 5
             and not re.search(r"\b(pt|pvt|ltd|llc|inc|tbk|co\.?)\b", lower)
-            and not EMAIL_RE.search(line)
-            and not PHONE_RE.search(line)
-            and not WEBSITE_RE.search(line)
+            and not EMAIL_RE.search(block_line)
+            and not PHONE_RE.search(block_line)
+            and not WEBSITE_RE.search(block_line)
             and not any(keyword in lower for keyword in TITLE_KEYWORDS | COMPANY_KEYWORDS | ADDRESS_KEYWORDS)
         ):
-            candidates.append(_candidate("name", line, max(confidence, 0.65), side, "top_front_line"))
+            # A line Vision reported as noticeably larger than the card's
+            # median text is a strong signal for a personal name (or the
+            # brand — the front-line/word-count/keyword gates above already
+            # filter out most company lines), so boost its confidence.
+            base_confidence = 0.72 if size_tag == "large" else 0.65
+            candidates.append(_candidate("name", block_line, max(confidence, base_confidence), side, "top_front_line"))
 
     return candidates

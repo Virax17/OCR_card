@@ -66,11 +66,16 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 # Local-dev credential source: path to a service-account JSON file on disk.
 # No default path — an unset value fails loudly instead of pointing at a dead path.
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-GOOGLE_VISION_MODEL = os.getenv("GOOGLE_VISION_MODEL", "builtin/weekly")
+GOOGLE_VISION_MODEL = os.getenv("GOOGLE_VISION_MODEL", "builtin/stable")
 GOOGLE_VISION_TIMEOUT_SECONDS = int(os.getenv("GOOGLE_VISION_TIMEOUT_SECONDS", "60"))
 GOOGLE_VISION_MINUTE_REQUEST_LIMIT = int(os.getenv("GOOGLE_VISION_MINUTE_REQUEST_LIMIT", "1800"))
 GOOGLE_VISION_FREE_UNITS_MONTHLY = int(os.getenv("GOOGLE_VISION_FREE_UNITS_MONTHLY", "1000"))
 GOOGLE_VISION_PRICE_PER_1000 = float(os.getenv("GOOGLE_VISION_PRICE_PER_1000", "1.50"))
+# Comma-separated BCP-47 language hints to improve Vision's recognition of
+# non-English names/text commonly seen on cards (e.g. "en,id,ar,zh").
+GOOGLE_VISION_LANGUAGE_HINTS = [
+    hint.strip() for hint in os.getenv("GOOGLE_VISION_LANGUAGE_HINTS", "en").split(",") if hint.strip()
+]
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}

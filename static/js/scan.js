@@ -17,6 +17,7 @@ export function wireScanScreen() {
   $("#scanFallbackGalleryBtn").addEventListener("click", () => $("#scanGalleryInput").click());
   $("#scanGalleryInput").addEventListener("change", handleGalleryChange);
   $("#shutterBtn").addEventListener("click", handleShutter);
+  $("#scanPlayBtn").addEventListener("click", playVideo);
   $("#batchToggle").addEventListener("click", toggleBatchMode);
   $("#batchDoneBtn").addEventListener("click", finishBatch);
   $("#reviewRetakeBtn").addEventListener("click", retakePhoto);
@@ -61,23 +62,69 @@ function closeScanScreen() {
   window.location.hash = returnRoute;
 }
 
+const CAMERA_ERROR_MESSAGES = {
+  NotAllowedError: "Camera permission was blocked. Enable camera access for this site in your browser settings, then reopen Scan.",
+  NotFoundError: "No camera was found on this device. You can still import photos from your gallery.",
+  NotReadableError: "The camera is already in use by another app. Close it and try again, or import photos instead.",
+  OverconstrainedError: "This device's camera doesn't support the requested settings.",
+};
+
 async function startCamera() {
   $("#scanFallback").classList.remove("is-active");
+  $("#scanPlayBtn").hidden = true;
   $("#scanVideo").style.display = "block";
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showFallback();
+
+  // getUserMedia only exists in a secure context (HTTPS, or localhost/127.0.0.1
+  // for local dev). Over plain http://<lan-ip> — the most common way a phone
+  // ends up here during local testing — navigator.mediaDevices is undefined
+  // and the camera can never start, no matter what permissions are granted.
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    showFallback("Camera needs a secure connection. Open this app at its https:// address (not a plain http:// local address) to use the camera — you can still import photos from your gallery.");
     return;
   }
+
+  const constraints = { video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } };
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    $("#scanVideo").srcObject = stream;
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (error) {
+    if (error?.name === "OverconstrainedError") {
+      // Some devices reject width/height ideals entirely; retry with just
+      // the soft facingMode constraint before giving up.
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      } catch (retryError) {
+        showFallback(CAMERA_ERROR_MESSAGES[retryError?.name]);
+        return;
+      }
+    } else {
+      showFallback(CAMERA_ERROR_MESSAGES[error?.name]);
+      return;
+    }
+  }
+
+  $("#scanVideo").srcObject = stream;
+  await playVideo();
+}
+
+async function playVideo() {
+  const video = $("#scanVideo");
+  try {
+    await video.play();
+    $("#scanPlayBtn").hidden = true;
   } catch {
-    showFallback();
+    // Some mobile browsers (notably iOS Safari) can reject autoplay of a
+    // srcObject stream even inside a user gesture — the stream stays live
+    // but the video never renders, leaving a black viewfinder with no
+    // feedback. Surface an explicit control so the user can retry the play()
+    // call from a direct tap, which browsers always allow.
+    $("#scanPlayBtn").hidden = false;
   }
 }
 
-function showFallback() {
+function showFallback(message) {
+  $("#scanFallbackMsg").textContent = message || "Camera access was denied or is unavailable. You can still import photos from your gallery.";
   $("#scanFallback").classList.add("is-active");
+  $("#scanPlayBtn").hidden = true;
   $("#scanVideo").style.display = "none";
 }
 
@@ -112,7 +159,11 @@ function resetBatch() {
 
 async function handleShutter() {
   const blob = await captureFrame();
-  if (!blob) return;
+  if (!blob) {
+    const { showToast } = await import("./app-shell.js");
+    showToast("Camera isn't ready yet — wait a moment and try again.", "error");
+    return;
+  }
   if (batchMode) {
     const url = URL.createObjectURL(blob);
     batchItems.push({ blob, url });

@@ -26,6 +26,12 @@ class OCRTextBlock(BaseModel):
     engine: str | None = None
     variant: str | None = None
     normalized_text: str | None = None
+    # Relative text height vs. the card's median line height. Large text is a
+    # strong signal for a person's name or the company/brand name; used by the
+    # candidate extractor and the Gemini prompt to disambiguate the two.
+    size_tag: Literal["large", "normal", "small"] | None = None
+    # Vertical position band within the card image (top/middle/bottom of bbox).
+    position_band: Literal["top", "middle", "bottom"] | None = None
 
 
 class OCRSideResult(BaseModel):

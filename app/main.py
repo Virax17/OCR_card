@@ -275,8 +275,13 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         if back_upload and back_bytes and back_filename:
             sides.append(("back", back_upload, back_bytes, back_filename))
 
+        # Preprocess once per side and OCR the CLEANED bytes (EXIF-rotated,
+        # contrast-enhanced, downscaled) rather than the raw upload — Vision
+        # sees the same image a human would find easiest to read.
+        ocr_bytes_by_side: dict[str, bytes] = {}
         for side, upload, raw_bytes, filename in sides:
-            _, width, height, quality, warnings = preprocess_image(raw_bytes)
+            processed_bytes, width, height, quality, warnings = preprocess_image(raw_bytes)
+            ocr_bytes_by_side[side] = processed_bytes
             insert_card_side(
                 event_id,
                 card_id=card_id,
@@ -289,9 +294,9 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
                 quality_warnings=warnings,
             )
 
-        ocr_results = [google_vision_extract_text(front_bytes, "front", event_id=event_id)]
+        ocr_results = [google_vision_extract_text(ocr_bytes_by_side["front"], "front", event_id=event_id)]
         if back_upload and back_bytes:
-            ocr_results.append(google_vision_extract_text(back_bytes, "back", event_id=event_id))
+            ocr_results.append(google_vision_extract_text(ocr_bytes_by_side["back"], "back", event_id=event_id))
         for result in ocr_results:
             insert_ocr_result(event_id, card_id, result)
         save_ocr_audit(event_id, card_id, ocr_results)
@@ -320,6 +325,7 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
             front_text=front_ocr,
             back_text=back_ocr,
             candidate_hints=candidate_hints,
+            ocr_results=ocr_results,
         )
         if fields:
             # A non-empty result means the Gemini request actually ran (vs. the

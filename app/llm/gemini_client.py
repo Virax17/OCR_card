@@ -5,6 +5,7 @@ import re
 import hashlib
 
 from app.config import BUSINESS_CATEGORIES, GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MODEL
+from app.models import OCRSideResult
 from app.extraction.field_resolver import (
     country_name_from_code,
     infer_country_and_code,
@@ -194,11 +195,22 @@ def _has_contact_value(line: str) -> bool:
     return bool(EMAIL_RE.search(line) or PHONE_RE.search(line) or WEBSITE_RE.search(line))
 
 
+HONORIFIC_RE = re.compile(r"^(mr|mrs|ms|mx|dr|prof|ir|eng|drs|haji|hajjah)\.?$", re.I)
+
+
 def _looks_like_person_name(line: str) -> bool:
     if _has_contact_value(line) or NOISE_RE.search(line) or ADDRESS_RE.search(line) or SERVICE_RE.search(line):
         return False
-    words = [word for word in re.findall(r"[A-Za-z][A-Za-z.'-]*", line) if len(word) > 1]
-    if not 2 <= len(words) <= 4:
+    # \w with re.UNICODE (the default in Python 3) matches accented/non-Latin
+    # letters too, so names like "Bùi Thị Hoa" or "Müller" aren't silently
+    # excluded just because they contain non-ASCII characters.
+    raw_words = [word for word in re.findall(r"[^\W\d_][\w.'-]*", line, re.UNICODE) if len(word) > 1]
+    # Honorifics and initials (Dr., Ir., M.T.) commonly precede/follow a name;
+    # don't let them count against the word-count gate.
+    words = [word for word in raw_words if not HONORIFIC_RE.match(word.rstrip("."))]
+    if not words:
+        words = raw_words
+    if not 1 <= len(words) <= 5:
         return False
     banned = {"office", "factory", "engineering", "fabrication", "radiator", "location", "website"}
     return not any(word.lower() in banned for word in words)
@@ -260,6 +272,14 @@ def _infer_address(lines: list[str]) -> str | None:
 
 
 def _infer_zip(text: str) -> str | None:
+    # Prefer a standalone digit run on an address-flavored line — scanning the
+    # whole card for any 5-6 digit sequence risks grabbing an isolated segment
+    # of a phone/fax number or an unrelated code instead of the postal code.
+    for line in text.splitlines():
+        if ADDRESS_RE.search(line) and not _has_contact_value(line):
+            match = re.search(r"(?<!\d)\d{4,8}(?!\d)", line)
+            if match:
+                return match.group(0)
     matches = re.findall(r"\b\d{5,6}\b", text)
     return matches[-1] if matches else None
 
@@ -389,8 +409,18 @@ def _value_supported_by_text(value: str | None, text: str) -> bool:
     normalized_text = _normalize_match_text(text)
     if not normalized_value:
         return False
+    # normalize_match_text already casefolds and strips punctuation/whitespace,
+    # so this substring check is tolerant of case and spacing differences
+    # between Gemini's answer and the raw OCR line (e.g. "John Doe" vs "JOHN
+    # DOE" or extra spacing around a hyphenated surname).
     if normalized_value in normalized_text:
         return True
+    # A name/value can be OCR'd split across two adjacent lines (e.g. a long
+    # designation wrapping, or a name broken across a line break by the card
+    # layout). Token-subset matching against the whole transcript still
+    # requires every word to appear somewhere, so this doesn't accept
+    # unrelated values — it only tolerates re-ordering/line-splitting of a
+    # value whose words are genuinely all present in the OCR text.
     tokens = [token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 1]
     if not tokens:
         return False
@@ -488,6 +518,7 @@ def structure_card_text_deterministic(
         "mobile": "contact1",
         "phone": "contact2",
         "fax": "contact3",
+        "zip": "zip_code",
     }
     for source, target in field_map.items():
         if by_field.get(source):
@@ -735,13 +766,60 @@ Rules:
         return {}
 
 
+FEW_SHOT_EXAMPLE = """
+Example — how to pick name vs. company from an annotated transcript:
+Annotated OCR lines:
+[front L0 | top | large] ACME INDUSTRIAL SUPPLY PTE LTD
+[front L1 | top | small] Precision Engineering & Fabrication
+[front L2 | middle | large] Tan Wei Ming
+[front L3 | middle | normal] Regional Sales Manager
+[front L4 | bottom | normal] M: +65 9123 4567  E: wei.ming@acme-industrial.com
+Correct extraction: business="ACME INDUSTRIAL SUPPLY PTE LTD" (top brand line), name="Tan Wei Ming"
+(large personal-name line, not the top brand, immediately above the designation),
+designation="Regional Sales Manager". Do not swap these: the company is the legal-entity/brand
+line even if it isn't the largest text, and the name is a personal-looking line distinct from it.
+""".strip()
+
+
+def _annotated_lines(side: str, blocks: list) -> list[str]:
+    lines = []
+    for block in blocks:
+        size_tag = getattr(block, "size_tag", None) or "normal"
+        position_band = getattr(block, "position_band", None) or "unknown"
+        lines.append(f"[{side} L{block.line_index} | {position_band} | {size_tag}] {block.text}")
+    return lines
+
+
+def _annotated_transcript(ocr_results: list[OCRSideResult] | None) -> str:
+    """Render OCR lines with position/size annotations so Gemini gets the same
+    layout cues a human reads a card with (top brand vs. a large personal-name
+    line), instead of only a flat, order-less block of text.
+    """
+    if not ocr_results:
+        return ""
+    lines: list[str] = []
+    for result in ocr_results:
+        if result.blocks:
+            lines.extend(_annotated_lines(result.side, result.blocks))
+    return "\n".join(lines)
+
+
 def structure_card_text(
     event_id: str,
     front_text: str,
     back_text: str | None = None,
     candidate_hints: list[dict] | None = None,
+    ocr_results: list[OCRSideResult] | None = None,
 ) -> dict:
     all_visible_text = "\n".join(part for part in [front_text, back_text or ""] if part.strip()).strip()
+    annotated_transcript = _annotated_transcript(ocr_results)
+    annotated_section = (
+        f"\nAnnotated OCR lines (position/size cues — large text near the top is usually the\n"
+        f"company/brand; a large personal-name-looking line elsewhere is usually the person):\n"
+        f"{annotated_transcript}\n"
+        if annotated_transcript
+        else ""
+    )
     prompt = f"""
 You are sorting OCR text from a two-sided business card into Excel contact fields.
 
@@ -765,9 +843,11 @@ Rules:
 - Contact1 is main direct/mobile. Contact2 is office/telephone. Contact3 is fax or another printed number.
 - Contact1, Contact2, and Contact3 must be digits only and include country calling code when visible or inferable.
 - Business/company should be the top brand/company line from the front OCR text. If OCR missed the logo text, return null rather than guessing.
+- Name is a PERSON's name, distinct from the business/company line, even when both appear near the top. A line tagged "large" near the top-middle or middle of the card that reads like a person's name (not a legal entity, not containing Pte/Ltd/PT/Inc/Co) is very likely the name. Do not put the company name into the name field, and do not put a person's name into business/company.
+- Zip_code is ONLY the postal/PIN code printed as part of the address block (a short 4-8 digit code, e.g. a 6-digit Indian PIN or a 5-digit US ZIP). Never take a zip_code value from inside a phone number, mobile number, or fax number — those are longer digit runs typically preceded by phone labels (T/Tel/M/Mob/F/Fax) or a country code, and are not postal codes.
 - Category must be exactly one of:
 {", ".join(BUSINESS_CATEGORIES)}
-
+{annotated_section}
 OCR front:
 {front_text or ""}
 
@@ -776,6 +856,8 @@ OCR back:
 
 Rule-based candidate hints:
 {json.dumps(candidate_hints or [], ensure_ascii=False, indent=2)}
+
+{FEW_SHOT_EXAMPLE}
 """.strip()
 
     snapshot = usage_snapshot()
@@ -802,14 +884,42 @@ Rule-based candidate hints:
         )
         return {}
 
+    generation_config = (
+        types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
+        if types is not None
+        else None
+    )
+
     try:
         last_error: Exception | None = None
         for api_key, key_label in _gemini_keys():
             try:
                 client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config=generation_config,
+                )
                 text = (getattr(response, "text", None) or "").strip()
                 completion_tokens = estimate_tokens(text)
+                parsed = _parse_json(text)
+                if not parsed and text:
+                    # JSON mode should prevent this, but if the model still
+                    # wrapped the JSON in prose, retry once with a corrective
+                    # reprompt rather than silently proceeding with an
+                    # almost-empty (but truthy) record.
+                    retry_prompt = (
+                        f"{prompt}\n\nYour previous reply was not valid JSON. "
+                        "Reply with ONLY the JSON object, no prose, no markdown fences."
+                    )
+                    retry_response = client.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=retry_prompt,
+                        config=generation_config,
+                    )
+                    retry_text = (getattr(retry_response, "text", None) or "").strip()
+                    completion_tokens += estimate_tokens(retry_text)
+                    parsed = _parse_json(retry_text)
                 record_usage(
                     event_id,
                     provider="gemini",
@@ -819,7 +929,11 @@ Rule-based candidate hints:
                     completion_tokens=completion_tokens,
                     key_label=key_label,
                 )
-                parsed = _parse_json(text)
+                if not parsed:
+                    # Still nothing usable after the retry — let the caller's
+                    # deterministic fallback run instead of returning a
+                    # near-empty record.
+                    return {}
                 parsed["front_text"] = front_text or parsed.get("front_text")
                 parsed["back_text"] = back_text if back_text is not None else parsed.get("back_text")
                 parsed["all_visible_text"] = all_visible_text or parsed.get("all_visible_text")
