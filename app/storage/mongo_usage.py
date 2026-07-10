@@ -117,35 +117,57 @@ def _uri_has_option(uri: str, names: set[str]) -> bool:
     return bool({key.lower() for key, _value in parse_qsl(query, keep_blank_values=True)} & names)
 
 
-def _build_ssl_context():
-    """Build an SSL context compatible with MongoDB Atlas on Render's Linux/OpenSSL 3.x.
+def _harden_ssl_context(ctx):
+    """Force TLS 1.2 as the max version and widen the cipher list.
 
     Root cause of TLSV1_ALERT_INTERNAL_ERROR on Render:
-    - Render uses Python 3.12 on Linux with OpenSSL 3.x.
+    - Render uses Linux with OpenSSL 3.x.
     - OpenSSL 3.x changed default TLS 1.3 behaviour/extensions that trigger
       Atlas's TLS terminator to reject the handshake with an internal error.
     - Forcing TLS 1.2 as the maximum version avoids this incompatibility.
     - Using SECLEVEL=1 widens the accepted cipher list for older Atlas configs.
     """
     import ssl
-    import certifi
 
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    ctx.check_hostname = True
-    ctx.load_verify_locations(certifi.where())
-    # Force TLS 1.2 — Atlas's TLS terminator can reject TLS 1.3 handshakes
-    # from OpenSSL 3.x on some Linux builds (TLSV1_ALERT_INTERNAL_ERROR).
     try:
         ctx.maximum_version = ssl.TLSVersion.TLSv1_2
     except AttributeError:
         pass  # ssl.TLSVersion not available on very old Python builds
-    # Lower security level to 1 so older / wider cipher suites are accepted.
     try:
         ctx.set_ciphers("HIGH:!aNULL:!MD5:@SECLEVEL=1")
     except ssl.SSLError:
         pass
     return ctx
+
+
+_ssl_patch_applied = False
+
+
+def _ensure_ssl_hardening_patch() -> None:
+    """Patch pymongo's internal SSL context builder to harden every context it creates.
+
+    PyMongo's MongoClient has no public option for injecting a pre-built
+    ssl.SSLContext — neither "ssl_context" nor "tlsSSLContext" is a
+    recognized keyword (both raise ConfigurationError; PyMongo only exposes
+    the tls*/ssl string/bool options listed in pymongo.common.VALIDATORS).
+    Patching the context factory it calls internally is the only way to
+    force TLS 1.2, short of vendoring pymongo's TLS setup.
+    """
+    global _ssl_patch_applied
+    if _ssl_patch_applied:
+        return
+    try:
+        import pymongo.client_options as _client_options
+
+        _original_get_ssl_context = _client_options.get_ssl_context
+
+        def _patched_get_ssl_context(*args, **kwargs):
+            return _harden_ssl_context(_original_get_ssl_context(*args, **kwargs))
+
+        _client_options.get_ssl_context = _patched_get_ssl_context
+        _ssl_patch_applied = True
+    except Exception as patch_err:
+        logger.debug("Could not patch pymongo ssl context: %s", patch_err)
 
 
 def _get_collection():
@@ -165,33 +187,24 @@ def _get_collection():
             from pymongo import MongoClient
             from pymongo.server_api import ServerApi
 
+            import certifi
+
             client_options: dict[str, Any] = {
                 "server_api": ServerApi("1"),
                 "serverSelectionTimeoutMS": 5000,
                 "connectTimeoutMS": 5000,
                 "socketTimeoutMS": 5000,
-                # Use a custom ssl context that forces TLS 1.2 to avoid
-                # OpenSSL 3.x / TLS 1.3 handshake failures with Atlas on Render.
                 "tls": True,
-                "tlsCAFile": None,  # Managed by our custom context below
+                "tlsCAFile": certifi.where(),
             }
             # Remove tls option if URI already specifies it to avoid conflicts.
             if _uri_has_option(MONGODB_URI, {"tls", "ssl"}):
                 client_options.pop("tls", None)
-            client_options.pop("tlsCAFile", None)
+                client_options.pop("tlsCAFile", None)
 
-            # Inject a custom ssl context via the internal pymongo kwarg.
-            # pymongo ≥ 3.12 and 4.x honour this parameter.
-            try:
-                import certifi
-                ssl_ctx = _build_ssl_context()
-                client_options["ssl_context"] = ssl_ctx
-            except Exception as ssl_ctx_err:
-                # If ssl context creation fails (very old env), fall back to
-                # certifi CA file and skip the custom context.
-                logger.debug("Could not build custom ssl context: %s", ssl_ctx_err)
-                import certifi
-                client_options["tlsCAFile"] = certifi.where()
+            # Force TLS 1.2 to avoid OpenSSL 3.x / TLS 1.3 handshake failures
+            # with Atlas on Render (see _harden_ssl_context docstring).
+            _ensure_ssl_hardening_patch()
 
             _client = MongoClient(MONGODB_URI, **client_options)
 
