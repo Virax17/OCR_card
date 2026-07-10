@@ -45,7 +45,7 @@ services:
       - key: MONGO_USAGE_ENABLED
         value: "true"
       - key: MONGO_USAGE_FAIL_CLOSED
-        value: "true"
+        value: "false"
       - key: MONGO_VISION_MONTHLY_LIMIT
         value: "1000"
       - key: MONGO_GEMINI_DAILY_LIMIT

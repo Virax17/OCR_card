@@ -53,12 +53,12 @@ GOOGLE_VISION_MODEL=builtin/stable
 GOOGLE_VISION_LANGUAGE_HINTS=en
 MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
 MONGO_USAGE_ENABLED=true
-MONGO_USAGE_FAIL_CLOSED=true
+MONGO_USAGE_FAIL_CLOSED=false
 ```
 
 `GOOGLE_VISION_LANGUAGE_HINTS` is a comma-separated list of BCP-47 language codes, such as `en,id,ar,zh`, that can improve recognition of non-English names and business-card text.
 
-MongoDB is used as the persistent 24/7 API usage tracker. When `MONGODB_URI` is set and `MONGO_USAGE_ENABLED=true`, the app stores Gemini daily request usage and Google Vision monthly OCR-unit usage in MongoDB so counters survive app restarts, redeploys, and Render free-tier sleep. Keep `MONGO_USAGE_FAIL_CLOSED=true` in production so scans pause if MongoDB is unreachable instead of silently losing limit accuracy.
+MongoDB is used as the persistent 24/7 API usage tracker. When `MONGODB_URI` is set and `MONGO_USAGE_ENABLED=true`, the app stores Gemini daily request usage and Google Vision monthly OCR-unit usage in MongoDB so counters survive app restarts, redeploys, and Render free-tier sleep. If MongoDB is unreachable, scans continue with local counters and the UI shows a fallback warning until the tracker is live again.
 
 Never commit `.env`, service-account JSON files, event databases, or card images.
 
@@ -122,7 +122,7 @@ The UI shows a MongoDB-backed 24/7 tracker whenever `MONGODB_URI` is configured:
 
 - Gemini daily cap: request count plus estimated tokens, reset at UTC midnight.
 - Google Vision monthly cap: OCR units, reset on the first day of the next UTC month.
-- MongoDB status: live, disabled, or unavailable/blocking.
+- MongoDB status: live, disabled, or fallback/local counters.
 
 The tracker is also returned by:
 
@@ -150,7 +150,7 @@ For the Google Vision free tier, keep:
 MONGO_VISION_MONTHLY_LIMIT=1000
 ```
 
-If either Mongo counter is at or over its configured limit, new scans return `429` and the offline queue stops retrying until the bucket resets.
+If either live Mongo counter is at or over its configured limit, new scans return `429` and the offline queue stops retrying until the bucket resets. If MongoDB itself is unreachable, scans continue with local counters so a temporary Atlas or network issue does not stop capture.
 
 ## SQLite Console
 

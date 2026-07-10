@@ -87,7 +87,7 @@ async function renderHealth(state) {
             ? "live"
             : mongo.checked === false && !usageMongo
               ? "configured - checked during usage"
-              : (mongo.fail_closed ? "unavailable - blocking scans" : "unavailable")
+              : (mongo.blocking_scans ? "unavailable - blocking scans" : "fallback - local counters")
         )
       : "disabled";
     el.innerHTML = `

@@ -112,11 +112,12 @@ function mongoStatusRow(mongo) {
     `;
   }
 
-  const status = mongo.fail_closed ? "Blocking scans" : "Not enforcing";
-  const message = mongo.fail_closed
+  const blocking = Boolean(mongo.blocking_scans);
+  const status = blocking ? "Blocking scans" : "Fallback";
+  const message = blocking
     ? "MongoDB is configured but unreachable, so new scans are blocked to keep limits accurate."
-    : "MongoDB is configured but unreachable. Scans can continue, but the persistent tracker is not updating.";
-  const detail = mongo.error ? ` ${mongo.error}` : "";
+    : (mongo.fallback_message || "MongoDB is configured but unreachable. Scans can continue with local counters, but the persistent tracker is not updating.");
+  const detail = mongo.error_summary ? ` ${mongo.error_summary}` : "";
   return `
     <div class="provider-row provider-row--error">
       <div class="provider-row-head">

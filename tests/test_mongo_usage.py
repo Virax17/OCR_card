@@ -35,7 +35,7 @@ def test_check_limits_allows_when_mongo_not_configured(monkeypatch) -> None:
     assert reason is None
 
 
-def test_check_limits_blocks_when_configured_mongo_is_unavailable(monkeypatch) -> None:
+def test_check_limits_allows_when_configured_mongo_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(mongo_usage, "MONGO_USAGE_ENABLED", True)
     monkeypatch.setattr(mongo_usage, "MONGODB_URI", "mongodb://example")
     monkeypatch.setattr(mongo_usage, "MONGO_USAGE_FAIL_CLOSED", True)
@@ -44,8 +44,8 @@ def test_check_limits_blocks_when_configured_mongo_is_unavailable(monkeypatch) -
 
     allowed, reason = mongo_usage.check_limits({"gemini": 1})
 
-    assert allowed is False
-    assert mongo_usage.is_unavailable_reason(reason)
+    assert allowed is True
+    assert reason is None
 
 
 def test_check_limits_blocks_projected_overage(monkeypatch) -> None:
