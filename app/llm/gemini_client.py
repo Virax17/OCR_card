@@ -7,6 +7,7 @@ import hashlib
 from app.config import BUSINESS_CATEGORIES, GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MODEL
 from app.models import OCRSideResult
 from app.extraction.field_resolver import (
+    COUNTRY_HINTS,
     country_name_from_code,
     infer_country_and_code,
     national_phone_number,
@@ -58,6 +59,46 @@ FIELDS = [
     "uncertain_fields",
 ]
 
+try:
+    from enum import Enum
+
+    from pydantic import BaseModel
+
+    _CategoryEnum = Enum("BusinessCategory", {value: value for value in BUSINESS_CATEGORIES})
+
+    class GeminiCardExtraction(BaseModel):
+        """Response-only schema for the multimodal Gemini call. Deliberately
+        excludes app-managed record fields (record_id/date/time/etc — see
+        BusinessCardRecord in app/models.py) since the model must never
+        produce those; category is a real enum so Gemini cannot return free
+        text like a job title instead of a taxonomy value."""
+
+        front_text: str | None = None
+        back_text: str | None = None
+        all_visible_text: str | None = None
+        name: str | None = None
+        designation: str | None = None
+        business: str | None = None
+        address: str | None = None
+        city: str | None = None
+        state: str | None = None
+        country: str | None = None
+        zip_code: str | None = None
+        website: str | None = None
+        category: _CategoryEnum | None = None
+        social_media: str | None = None
+        notes: str | None = None
+        email1: str | None = None
+        email2: str | None = None
+        contact1: str | None = None
+        contact2: str | None = None
+        contact3: str | None = None
+        country_code: str | None = None
+        field_evidence: dict[str, str] | None = None
+        uncertain_fields: list[str] | None = None
+except Exception:  # pragma: no cover - pydantic/enum always available in practice
+    GeminiCardExtraction = None
+
 BUSINESS_CARD_VISUAL_RULES = """
 Business-card layout rules learned from local samples:
 - First transcribe all readable printed text from each card side before choosing fields. Field values must come from that transcript.
@@ -97,9 +138,21 @@ def is_gemini_configured() -> bool:
     return bool(GEMINI_API_KEYS or GEMINI_API_KEY) and genai is not None
 
 
+# Keys that returned 429/RESOURCE_EXHAUSTED this process. A free-tier quota
+# reset happens at most once a day, so once a key is exhausted it stays dead
+# for the rest of the process — retrying it on every subsequent card wastes
+# a network round trip and logs a duplicate error for no benefit.
+_exhausted_key_labels: set[str] = set()
+
+
 def _gemini_keys() -> list[tuple[str, str]]:
     keys = GEMINI_API_KEYS or ([GEMINI_API_KEY] if GEMINI_API_KEY else [])
-    return [(key, _key_label(key, index) or f"key{index + 1}") for index, key in enumerate(keys)]
+    all_keys = [(key, _key_label(key, index) or f"key{index + 1}") for index, key in enumerate(keys)]
+    live_keys = [(key, label) for key, label in all_keys if label not in _exhausted_key_labels]
+    # If every key is marked exhausted, try them all again anyway — better to
+    # pay for one more failed round trip than to permanently disable Gemini
+    # until the process restarts.
+    return live_keys or all_keys
 
 
 def _parse_json(text: str) -> dict:
@@ -168,7 +221,8 @@ DESIGNATION_RE = re.compile(
     re.I,
 )
 ADDRESS_RE = re.compile(
-    r"\b(jl\.?|jalan|street|road|kav\.?|kel\.?|kec\.?|kota|bekasi|banten|cilegon|jakarta|ruko|wisma|building|floor|office|rt\.?|rw\.?|no\.?)\b",
+    r"\b(jl\.?|jalan|street|road|kav\.?|kel\.?|kelurahan|kec\.?|kecamatan|kabupaten|provinsi|kota|"
+    r"bekasi|banten|cilegon|jakarta|ruko|wisma|building|floor|office|rt\.?|rw\.?|no\.?)\b",
     re.I,
 )
 NOISE_RE = re.compile(
@@ -206,8 +260,57 @@ def _has_contact_value(line: str) -> bool:
 
 HONORIFIC_RE = re.compile(r"^(mr|mrs|ms|mx|dr|prof|ir|eng|drs|haji|hajjah)\.?$", re.I)
 
+# Bare field-label words that appear on their own OCR line (the value sits on
+# a different line/column). These must never become a name/designation/
+# business value even though they are genuinely present in the OCR text —
+# _value_supported_by_text can't tell "label" from "value" on its own.
+FIELD_LABEL_BLOCKLIST = {
+    "phone",
+    "tel",
+    "telp",
+    "telephone",
+    "mobile",
+    "mob",
+    "cell",
+    "hp",
+    "fax",
+    "email",
+    "e-mail",
+    "mail",
+    "web",
+    "website",
+    "address",
+    "contact",
+    "office",
+    "direct",
+    "whatsapp",
+    "name",
+    "designation",
+    "company",
+    "business",
+}
+
+# Countries/places that show up as standalone all-caps lines on a card (often
+# the top of an address block) and must never be mistaken for a person name
+# or a business/brand line.
+_PLACE_BLOCKLIST = {
+    hint for _country, _iso, _code, hints in COUNTRY_HINTS for hint in hints
+} | {country.lower() for country, _iso, _code, _hints in COUNTRY_HINTS}
+
+
+def _is_field_label(line: str) -> bool:
+    normalized = re.sub(r"[^a-z-]", "", line.lower())
+    return normalized in FIELD_LABEL_BLOCKLIST
+
+
+def _is_place_name(line: str) -> bool:
+    normalized = re.sub(r"[^a-z ]", "", line.lower()).strip()
+    return normalized in _PLACE_BLOCKLIST
+
 
 def _looks_like_person_name(line: str) -> bool:
+    if _is_field_label(line) or _is_place_name(line):
+        return False
     if _has_contact_value(line) or NOISE_RE.search(line) or ADDRESS_RE.search(line) or SERVICE_RE.search(line):
         return False
     if _looks_like_company_identity(line):
@@ -241,6 +344,8 @@ def _looks_like_company_identity(line: str | None) -> bool:
 
 
 def _looks_like_business(line: str) -> bool:
+    if _is_field_label(line) or _is_place_name(line):
+        return False
     if _has_contact_value(line) or NOISE_RE.search(line) or ADDRESS_RE.search(line):
         return False
     words = re.findall(r"[A-Za-z0-9&.'-]+", line)
@@ -257,9 +362,28 @@ def _looks_like_business(line: str) -> bool:
     return len(words) <= 4 and any(len(word) >= 4 for word in words)
 
 
+# A candidate designation line that runs unusually long is almost always a
+# Vision paragraph-merge (name + title + region collapsed into one OCR
+# block) rather than a real title — accepting it whole would dump the
+# merged blob into the designation column. Reject rather than guess at a
+# split; the multimodal Gemini path (which reads the actual image layout)
+# is what correctly separates these, not more OCR-text heuristics.
+_MAX_DESIGNATION_WORDS = 6
+
+
 def _infer_designation(lines: list[str]) -> tuple[str | None, int | None]:
     for index, line in enumerate(lines):
-        if DESIGNATION_RE.search(line) and not SERVICE_RE.search(line) and not _has_contact_value(line):
+        # DESIGNATION_RE's "head" keyword also matches "Head Office"/"Head
+        # Quarters" address lines, and ADDRESS_RE independently flags those
+        # same office/building lines — reject them here so a building/branch
+        # label is never mistaken for a person's job title.
+        if (
+            DESIGNATION_RE.search(line)
+            and not SERVICE_RE.search(line)
+            and not ADDRESS_RE.search(line)
+            and not _has_contact_value(line)
+            and len(line.split()) <= _MAX_DESIGNATION_WORDS
+        ):
             return line, index
     return None, None
 
@@ -275,8 +399,26 @@ def _infer_name(lines: list[str], designation_index: int | None) -> str | None:
     return None
 
 
-def _infer_business(lines: list[str], name: str | None = None) -> str | None:
-    for line in lines[:8]:
+def _infer_business(lines: list[str], name: str | None = None, front_line_count: int | None = None) -> str | None:
+    # Company/business must come from the front side — the app's own rule is
+    # that back-side branch/office/product lines are address/category
+    # support only, never the company name. front_line_count lets the caller
+    # tell us where the front side ends in the combined line list; without
+    # it (e.g. existing single-side callers/tests) fall back to all lines.
+    front_lines = lines if front_line_count is None else lines[:front_line_count]
+    # A line carrying a legal-entity marker (PT/Ltd/Pte/...) is unambiguously
+    # the company name, even if it isn't the first business-shaped line on
+    # the card — a marketing tagline ("Heating and Cooling Solution") often
+    # sits above it, and a multi-line wrapped address can push the legal-
+    # entity line well past the first few lines, so scan the whole front
+    # side rather than an arbitrary early cutoff.
+    for line in front_lines:
+        if line != name and LEGAL_ENTITY_RE.search(line) and _looks_like_business(line):
+            return line
+    # Scan the whole front side, not just the first 8 lines: some cards print
+    # the brand/logo as a single word in the footer (e.g. "PETROSEA" after
+    # the contact block) rather than at the top.
+    for line in front_lines:
         if line == name:
             continue
         if _looks_like_business(line):
@@ -525,6 +667,7 @@ def structure_card_text_deterministic(
     fields["back_text"] = back_text
     fields["all_visible_text"] = "\n".join(part for part in [front_text, back_text or ""] if part.strip()).strip()
     lines = _text_lines(fields["all_visible_text"])
+    front_line_count = len(_text_lines(front_text))
 
     candidate_hints = candidate_hints or []
     by_field: dict[str, list[dict]] = {}
@@ -547,16 +690,54 @@ def structure_card_text_deterministic(
     for source, target in field_map.items():
         if by_field.get(source):
             fields[target] = by_field[source][0].get("value")
-    if fields.get("designation") and SERVICE_RE.search(str(fields["designation"])):
-        fields["designation"] = None
 
-    inferred_designation, designation_index = _infer_designation(lines)
-    if not fields.get("designation"):
-        fields["designation"] = inferred_designation
-    if not fields.get("name"):
-        fields["name"] = _infer_name(lines, designation_index)
-    if not fields.get("business"):
-        fields["business"] = _infer_business(lines, fields.get("name"))
+    # A "designation" hint comes from TITLE_KEYWORDS (extract_candidates),
+    # a broader vocabulary than DESIGNATION_RE (it also catches CEO/Founder/
+    # Partner/VP, which DESIGNATION_RE doesn't) — so trust the hint unless
+    # it's demonstrably wrong: an office/building line ("Head Office" matches
+    # DESIGNATION_RE's "head"), a service/tagline match, a line carrying a
+    # contact value, or an over-long Vision paragraph-merge blob. A hint that
+    # merely fails DESIGNATION_RE's narrower keyword match is not evidence
+    # it's wrong.
+    designation_hint = fields.get("designation")
+    if designation_hint and not (
+        SERVICE_RE.search(str(designation_hint))
+        or ADDRESS_RE.search(str(designation_hint))
+        or _has_contact_value(str(designation_hint))
+        or len(str(designation_hint).split()) > _MAX_DESIGNATION_WORDS
+    ):
+        fields["designation"] = designation_hint
+        designation_index = next((i for i, line in enumerate(lines) if line == designation_hint), None)
+    else:
+        fields["designation"], designation_index = _infer_designation(lines)
+
+    # Unlike designation/business, every "name" candidate hint comes from
+    # exactly one source (extract_candidates' top_front_line heuristic: the
+    # first short front-side line, with no positional/designation context).
+    # It is not independently trustworthy, so the designation-anchored
+    # _infer_name is always authoritative for name.
+    fields["name"] = _infer_name(lines, designation_index)
+
+    # Like name, every "business"/"company" hint comes from position-blind
+    # sources (top_front_brand/top_front_company/company_keyword — the
+    # highest-Vision-confidence match, not the correct one), so a one-word
+    # marketing tagline ("RENEWABLE", "ENVIRONMENTAL") can outrank the real
+    # brand. _infer_business's legal-entity-first, front-side-scoped scan is
+    # the authoritative source; the hint only fills in when inference finds
+    # nothing at all.
+    inferred_business = _infer_business(lines, fields.get("name"), front_line_count=front_line_count)
+    business_hint = fields.get("business")
+    if inferred_business:
+        fields["business"] = inferred_business
+    elif (
+        business_hint
+        and not _is_field_label(str(business_hint))
+        and not _is_place_name(str(business_hint))
+        and not DESIGNATION_RE.search(str(business_hint))
+    ):
+        fields["business"] = business_hint
+    else:
+        fields["business"] = None
     if not fields.get("address"):
         fields["address"] = _infer_address(lines)
     if not fields.get("zip_code"):
@@ -763,54 +944,60 @@ def structure_card_image(
     front_mime_type: str,
     back_image: bytes | None = None,
     back_mime_type: str | None = None,
+    front_text: str | None = None,
+    back_text: str | None = None,
+    candidate_hints: list[dict] | None = None,
+    ocr_results: list[OCRSideResult] | None = None,
 ) -> dict:
-    prompt = f"""
-Read this business card image directly. Do the task in two internal passes:
-1. TEXT PASS: transcribe every readable printed text line from the front image and back image. Preserve line order and side labels. Include small footer text, icon-labeled contact lines, and logo text. Ignore QR payload decoding unless the QR's printed caption is visible.
-2. SORTING PASS: map only the transcribed text into the requested Excel fields.
+    """Send the card image(s) to Gemini so layout (logo size/position, a
+    person-name line vs. a brand line) is judged from the actual picture
+    instead of flattened OCR text. The Vision OCR transcript is still passed
+    as grounding/hint text — the image is authoritative, OCR fills gaps and
+    lets field_evidence cite exact printed lines.
+    """
+    annotated_transcript = _annotated_transcript(ocr_results)
+    grounding_section = ""
+    if front_text or back_text or annotated_transcript:
+        grounding_section = f"""
+Google Vision OCR already read this card as grounding context (it can contain
+mistakes — the image is the source of truth for anything OCR mis-read):
 
-Return only valid JSON with these keys:
-{", ".join(FIELDS)}
+OCR front:
+{front_text or ""}
+
+OCR back:
+{back_text or ""}
+
+Annotated OCR lines (position/size cues — large text near the top is usually the
+company/brand; a large personal-name-looking line elsewhere is usually the person):
+{annotated_transcript}
+
+Rule-based candidate hints:
+{json.dumps(candidate_hints or [], ensure_ascii=False, indent=2)}
+"""
+
+    prompt = f"""
+Look at the attached business card image(s) and extract structured contact fields
+matching the response schema. Transcribe the printed text you can see, then sort
+it into the schema's fields. Use the image as the source of truth for layout
+(which line is the logo/brand, which line is a person's name, relative text size
+and position); use the OCR grounding text below only to fill in exact wording and
+catch what OCR read correctly.
 
 Rules:
 {BUSINESS_CARD_VISUAL_RULES}
-- Use only values visible on the card image.
-- Do not invent missing values.
-- Return null for fields not present.
-- Prefer blank/null over guessing. Accuracy is more important than filling every cell.
+- Use only values visible on the card image. Do not invent missing values; prefer null over a guessed value.
 - Every non-null field except category/country_code must be supported by a line in front_text/back_text.
-- Never use service bullet text, marketing slogans, product names, product categories, or "Business Outline" headings as a person name or business name.
-- If the front side contains a person block, name is the person block's name, designation is the line directly under/near that name, and business is the logo/company name.
-- Do not put the company/legal entity/brand into name. A line containing PT/Pvt/Ltd/LLC/Inc/Pte/Tbk/Co, business terms like Engineering/Industrial/Services/Trading/Metal/Works/Radiator/Marine/Oil/Gas, or a single all-caps brand token is company/business, not a person.
-- If no separate personal-name line is visible near a designation, return name as null rather than copying the business/company line.
-- front_text must contain the full transcription of the front side, with lines separated by "\\n".
-- back_text must contain the full transcription of the back side if provided, with lines separated by "\\n"; otherwise null.
+- Never use service bullet text, marketing slogans, product names, or "Business Outline" headings as a person name or business name.
+- front_text/back_text must contain the full transcription of that side, lines separated by "\\n"; back_text is null if no back image was provided.
 - all_visible_text must combine front_text and back_text.
 - field_evidence must be an object whose keys are field names and whose values are the exact transcript line(s) used for that field.
 - uncertain_fields must be an array of field names you are not confident about.
-- Read both sides if a back image is provided.
-- Output must match this Excel schema: Date is created by the app; you return Name, Designation, Business, Address, City, State, Country, Zip Code, Website, Category, Social Media, Notes, Email1, Email2, Contact1, Contact2, Contact3.
-- company and business mean the top-most brand/logo/company name on the card. On most business cards this is at the top of the front side, often as a stylized logo. Prefer that top brand text over address lines, building names, legal footers, or back-side office branch names.
-- If the company name is stylized as a design/logo, interpret the visible letters as the company name. Do not describe the logo.
-- country_code is the international dialing code, for example +91, +62, +971.
-- phone_number means office/telephone/landline number from labels like T, Tel, Phone, Office.
-- mobile_number means mobile/cell number from labels like M, Mob, Mobile, Cell.
-- fax_number means fax number from labels like F or Fax.
-- contact1 is the main direct/mobile number. contact2 is office/telephone/landline. contact3 is fax or another printed number.
-- contact1, contact2, and contact3 must be digits only and include the country calling code when visible or inferable. Example: +60 13-358 1918 becomes 60133581918.
-- If a number is already written as digits with country code, do not add the country code again.
-- email1 is the primary email. email2 is the secondary email if printed.
-- social_media should contain printed LinkedIn/Facebook/Instagram/WeChat/social handles or URLs only.
-- notes should be null unless there is important printed context that does not fit any other column.
-- phone_primary should prefer mobile_number when present, otherwise phone_number, and include country_code.
-- Email must contain @ and a valid domain. Do not confuse email with website.
-- Website must be the printed web/domain value such as www.example.com or example.com. Do not use email domains unless a website is separately printed.
-- If multiple domains are visible, choose the website whose domain is most similar to the company/business name.
-- If no separate website is printed, use an email domain as website only when it clearly matches the company/business name.
-- Use address/country text and printed phone prefixes to infer country_code. The phone prefix wins when it conflicts with a guessed country.
-- Country must be the full country name, not ISO code. For example use Indonesia, not ID.
-- category must be exactly one of:
-{", ".join(BUSINESS_CATEGORIES)}
+- Contact1 is main direct/mobile, Contact2 is office/telephone, Contact3 is fax or another printed number — all digits only, with country calling code when visible or inferable.
+- Country must be the full country name, not an ISO code (e.g. Indonesia, not ID).
+- Category must be the single closest match to the company's business; never copy a job title or address into category.
+{grounding_section}
+{FEW_SHOT_EXAMPLE}
 """.strip()
 
     snapshot = usage_snapshot()
@@ -824,6 +1011,93 @@ Rules:
             status="blocked_local_limit",
             error_message="Local Gemini usage limit reached",
         )
+        return {}
+
+    if not is_gemini_configured():
+        record_usage(
+            event_id,
+            model=GEMINI_MODEL,
+            purpose="business_card_image_structuring",
+            prompt_tokens=prompt_tokens,
+            status="skipped_not_configured",
+            error_message="Gemini SDK or API key is missing",
+        )
+        return {}
+
+    all_visible_text = "\n".join(part for part in [front_text or "", back_text or ""] if part.strip()).strip()
+    generation_config = (
+        types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+            response_schema=GeminiCardExtraction,
+        )
+        if types is not None and GeminiCardExtraction is not None
+        else (
+            types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
+            if types is not None
+            else None
+        )
+    )
+    contents = [prompt, types.Part.from_bytes(data=front_image, mime_type=front_mime_type or "image/jpeg")]
+    if back_image:
+        contents.append(types.Part.from_bytes(data=back_image, mime_type=back_mime_type or "image/jpeg"))
+
+    try:
+        last_error: Exception | None = None
+        for api_key, key_label in _gemini_keys():
+            try:
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=generation_config,
+                )
+                text = (getattr(response, "text", None) or "").strip()
+                completion_tokens = estimate_tokens(text)
+                # response.parsed is a schema-validated Pydantic instance when
+                # response_schema was honored; fall back to hand-parsing the
+                # raw JSON text if the SDK/model didn't populate it.
+                parsed_model = getattr(response, "parsed", None)
+                if parsed_model is not None and hasattr(parsed_model, "model_dump"):
+                    parsed = parsed_model.model_dump(mode="json")
+                else:
+                    parsed = _parse_json(text)
+                record_usage(
+                    event_id,
+                    provider="gemini",
+                    model=GEMINI_MODEL,
+                    purpose="business_card_image_structuring",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    key_label=key_label,
+                )
+                if not parsed:
+                    return {}
+                parsed["front_text"] = front_text or parsed.get("front_text")
+                parsed["back_text"] = back_text if back_text is not None else parsed.get("back_text")
+                parsed["all_visible_text"] = all_visible_text or parsed.get("all_visible_text")
+                return clean_structured_fields(parsed)
+            except Exception as exc:
+                last_error = exc
+                message = str(exc)
+                record_usage(
+                    event_id,
+                    provider="gemini",
+                    model=GEMINI_MODEL,
+                    purpose="business_card_image_structuring",
+                    prompt_tokens=prompt_tokens,
+                    status="error",
+                    error_message=message[:500],
+                    key_label=key_label,
+                )
+                if "429" in message or "RESOURCE_EXHAUSTED" in message:
+                    _exhausted_key_labels.add(key_label)
+                else:
+                    break
+        if last_error:
+            raise last_error
+        return {}
+    except Exception:
         return {}
 
 
@@ -1023,53 +1297,12 @@ Rule-based candidate hints:
                     error_message=message[:500],
                     key_label=key_label,
                 )
-                if "429" not in message and "RESOURCE_EXHAUSTED" not in message:
+                if "429" in message or "RESOURCE_EXHAUSTED" in message:
+                    _exhausted_key_labels.add(key_label)
+                else:
                     break
         if last_error:
             raise last_error
         return {}
     except Exception as exc:
-        return {}
-
-    if not is_gemini_configured() or types is None:
-        record_usage(
-            event_id,
-            model=GEMINI_MODEL,
-            purpose="business_card_image_structuring",
-            prompt_tokens=prompt_tokens,
-            status="skipped_not_configured",
-            error_message="Gemini SDK or API key is missing",
-        )
-        return {}
-
-    contents = [
-        prompt,
-        types.Part.from_bytes(data=front_image, mime_type=front_mime_type or "image/jpeg"),
-    ]
-    if back_image:
-        contents.append(types.Part.from_bytes(data=back_image, mime_type=back_mime_type or "image/jpeg"))
-
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(model=GEMINI_MODEL, contents=contents)
-        text = (getattr(response, "text", None) or "").strip()
-        completion_tokens = estimate_tokens(text)
-        record_usage(
-            event_id,
-            model=GEMINI_MODEL,
-            purpose="business_card_image_structuring",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        parsed = _parse_json(text)
-        return clean_structured_fields(parsed)
-    except Exception as exc:
-        record_usage(
-            event_id,
-            model=GEMINI_MODEL,
-            purpose="business_card_image_structuring",
-            prompt_tokens=prompt_tokens,
-            status="error",
-            error_message=str(exc)[:500],
-        )
         return {}

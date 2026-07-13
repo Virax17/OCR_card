@@ -272,3 +272,117 @@ def test_cleanup_rejects_legal_entity_as_person_name() -> None:
 
     assert fields["business"] == "ASR PT. AIR SURYA RADIATOR"
     assert fields["name"] == "BUDI SANTOSO"
+
+
+def test_deterministic_fallback_finds_name_below_top_brand_logo() -> None:
+    # Regression: AALBORG card — a real card where OCR merged the top brand
+    # across several lines and the person's name/designation sit well below
+    # it. The old top-front-line heuristic picked the brand as the "name".
+    fields = structure_card_text_deterministic(
+        front_text="\n".join(
+            [
+                "AALBORG INDUSTRI",
+                "INDONESIA",
+                "NS Group",
+                "Budhi Kristyo Wibowo",
+                "Technical Director",
+                "Email: budikris@aalborgindo.com",
+                "Mobile: +62 811-2140-234",
+                "PT. AALBORG INDUSTRI INDONESIA",
+                "Jl. Rawa Sumur II, Blok III, Kav. CC 6-7",
+                "Jakarta Timur, Indonesia 13930",
+            ]
+        ),
+        candidate_hints=[
+            {"field": "name", "value": "AALBORG INDUSTRI", "confidence": 0.9, "evidence": "top_front_line"},
+            {"field": "company", "value": "INDONESIA", "confidence": 0.9, "evidence": "top_front_brand"},
+            {"field": "designation", "value": "Technical Director", "confidence": 0.72, "evidence": "title_keyword"},
+        ],
+    )
+
+    assert fields["name"] == "Budhi Kristyo Wibowo"
+    assert fields["business"] == "PT. AALBORG INDUSTRI INDONESIA"
+    assert fields["designation"] == "Technical Director"
+
+
+def test_deterministic_fallback_rejects_field_label_words_as_name() -> None:
+    # Regression: bare OCR label words ("Phone", "Email", "Address") sitting
+    # on their own line, with the actual value on a different line, must
+    # never become the extracted name.
+    fields = structure_card_text_deterministic(
+        front_text="\n".join(
+            [
+                "Office",
+                "Phone",
+                "M. Phone",
+                "Email",
+                "PT. ENERTECH ENGINEERING",
+                "RICHARD ADOLF VHW",
+                "Director",
+                ": 021 2105 1245",
+                ": richard.mytwins@gmail.com",
+            ]
+        ),
+        candidate_hints=[
+            {"field": "name", "value": "Email", "confidence": 0.9, "evidence": "top_front_line"},
+            {"field": "company", "value": "Phone", "confidence": 0.72, "evidence": "company_keyword"},
+            {"field": "designation", "value": "Director", "confidence": 0.72, "evidence": "title_keyword"},
+        ],
+    )
+
+    assert fields["name"] == "RICHARD ADOLF VHW"
+    assert fields["business"] == "PT. ENERTECH ENGINEERING"
+    assert fields["name"] not in {"Phone", "Email", "Address", "Office"}
+
+
+def test_deterministic_fallback_keeps_designation_hint_outside_narrow_keyword_list() -> None:
+    # Regression: DESIGNATION_RE's keyword list is narrower than the
+    # TITLE_KEYWORDS vocabulary that produces designation hints (e.g. CEO,
+    # Founder, Partner aren't in DESIGNATION_RE). A hint that merely fails
+    # that narrower keyword match must not be discarded.
+    fields = structure_card_text_deterministic(
+        front_text="ACME CORP\nJohn Doe\nCEO\nEmail: john@acme.com",
+        candidate_hints=[
+            {"field": "name", "value": "John Doe", "confidence": 0.8, "evidence": "top_front_line"},
+            {"field": "designation", "value": "CEO", "confidence": 0.72, "evidence": "title_keyword"},
+            {"field": "company", "value": "ACME CORP", "confidence": 0.82, "evidence": "top_front_company"},
+        ],
+    )
+
+    assert fields["designation"] == "CEO"
+
+
+def test_deterministic_fallback_does_not_use_back_side_branch_name_as_business() -> None:
+    # Regression: _infer_business's whole-card scan must stay front-side
+    # only — a back-side branch/office line must never win over (or replace
+    # with nothing) a legitimate front-side company name.
+    fields = structure_card_text_deterministic(
+        front_text="xyz\nJohn Doe\nSales Manager",
+        back_text="XYZ SERVICE CENTER BRANCH OFFICE",
+    )
+
+    assert fields["business"] != "XYZ SERVICE CENTER BRANCH OFFICE"
+
+
+def test_deterministic_fallback_finds_legal_entity_past_wrapped_address() -> None:
+    # Regression: a multi-line wrapped address pushed the real "PT. ..."
+    # company line past the old first-8-lines cutoff in _infer_business.
+    fields = structure_card_text_deterministic(
+        front_text="\n".join(
+            [
+                "Sahat Siahaan",
+                "Director",
+                "0859-2532-5999",
+                "info@mechaeltra.com",
+                "www.mechaelta.com",
+                "Jl. Pinang Raya Blok F16 No. 21,",
+                "Kawasan Delta Silicon 3, Lippo",
+                "Cikarang, Kabupaten Bekasi.",
+                "Jawa Barat 17530",
+                "PT. Mechatronic Transtec Indonesia",
+            ]
+        ),
+    )
+
+    assert fields["business"] == "PT. Mechatronic Transtec Indonesia"
+    assert fields["name"] == "Sahat Siahaan"

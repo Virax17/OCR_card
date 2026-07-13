@@ -16,6 +16,9 @@ MongoDB auto-delete old buckets after they are no longer needed.
 from __future__ import annotations
 
 import logging
+import queue as _queue
+import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -49,6 +52,30 @@ _PROVIDER_PERIODS = {
 _client = None
 _index_ready = False
 _last_error: str | None = None
+
+# Reuse the client across calls; only tear it down after repeated hard failures
+# (PyMongo reconnects on its own for transient blips). Closing before discard
+# releases the old connection pool/monitor threads instead of leaking them.
+_consecutive_failures = 0
+_MAX_FAILURES_BEFORE_RESET = 3
+
+# Circuit breaker: after a connection failure, don't retry (and eat another
+# multi-second timeout) until this cooldown passes. Keeps scans fast during a
+# Mongo outage instead of stalling every request on server selection.
+_RETRY_COOLDOWN_SECONDS = 30.0
+_next_retry_at = 0.0
+
+# Short-lived in-memory cache of per-period counts, keyed "provider:period".
+# Value is (monotonic_ts, used, tokens). Keeps reads off the request path and
+# lets the live meter reflect writes immediately via optimistic bumps.
+_read_cache: dict[str, tuple[float, int, int]] = {}
+_CACHE_TTL_SECONDS = 30.0
+
+# Mongo writes run on a single daemon thread so a scan never blocks on the
+# round-trip. increment() enqueues and returns immediately.
+_write_queue: "_queue.Queue[tuple]" = _queue.Queue()
+_writer_thread: threading.Thread | None = None
+_writer_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -172,16 +199,19 @@ def _ensure_ssl_hardening_patch() -> None:
 
 def _get_collection():
     """Return the usage collection, or None if Mongo is unavailable/disabled."""
-    global _client, _index_ready, _last_error
+    global _client, _index_ready, _last_error, _consecutive_failures, _next_retry_at
     if not is_enabled():
         _last_error = None
         return None
+    # During a known outage, skip the (re)connect attempt until the cooldown
+    # elapses so scans don't stall on a server-selection timeout every time.
+    if _client is None and time.monotonic() < _next_retry_at:
+        return None
     try:
-        # Reset a poisoned client so the next call creates a fresh connection.
-        # Without this, a TLS/timeout error on the first attempt permanently
-        # caches the broken MongoClient and every subsequent call fails.
-        if _client is None or _last_error:
-            _client = None
+        # Reuse the existing client — PyMongo reconnects on its own, so a
+        # transient blip should not trigger a full rebuild (which leaks the old
+        # connection pool and monitor threads and churns the M0 connection cap).
+        if _client is None:
             _index_ready = False
             # Import here so the app still starts if pymongo is missing.
             from pymongo import MongoClient
@@ -214,12 +244,23 @@ def _get_collection():
             collection.create_index("expire_at", expireAfterSeconds=0)
             _index_ready = True
         _last_error = None
+        _consecutive_failures = 0
         return collection
     except Exception as exc:  # noqa: BLE001
         _last_error = str(exc)
-        _client = None  # Force a fresh client on the next attempt
-        _index_ready = False
+        _consecutive_failures += 1
+        _next_retry_at = time.monotonic() + _RETRY_COOLDOWN_SECONDS
         logger.warning("Mongo usage unavailable: %s", exc)
+        # Only tear the client down after repeated failures, and close it first
+        # so the old pool is released rather than leaked.
+        if _consecutive_failures >= _MAX_FAILURES_BEFORE_RESET and _client is not None:
+            try:
+                _client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _client = None
+            _index_ready = False
+            _consecutive_failures = 0
         return None
 
 
@@ -251,14 +292,28 @@ def config_report() -> dict:
 
 
 def get_usage(provider: str, now: datetime | None = None) -> MongoUsage | None:
-    """Current-period usage for a provider, or None if tracking is unavailable."""
+    """Current-period usage for a provider, or None if tracking is unavailable.
+
+    Reads are served from a short-lived in-memory cache so repeated scans and
+    UI polls don't each hit MongoDB. Only a cache miss (older than the TTL)
+    triggers a real query. When Mongo is unreachable, a stale cached value is
+    served rather than nothing.
+    """
     spec = _PROVIDER_PERIODS.get(provider)
     if spec is None:
         return None
     kind, limit, _label, _unit = spec
     period = period_key(kind, now)
+    cache_key = f"{provider}:{period}"
+
+    cached = _read_cache.get(cache_key)
+    if cached is not None and (time.monotonic() - cached[0]) < _CACHE_TTL_SECONDS:
+        return MongoUsage(provider=provider, period_kind=kind, period=period, used=cached[1], limit=limit, tokens=cached[2])
+
     collection = _get_collection()
     if collection is None:
+        if cached is not None:
+            return MongoUsage(provider=provider, period_kind=kind, period=period, used=cached[1], limit=limit, tokens=cached[2])
         return None
     try:
         doc = collection.find_one({"provider": provider, "period": period})
@@ -266,9 +321,12 @@ def get_usage(provider: str, now: datetime | None = None) -> MongoUsage | None:
         global _last_error
         _last_error = str(exc)
         logger.warning("Mongo get_usage failed: %s", exc)
+        if cached is not None:
+            return MongoUsage(provider=provider, period_kind=kind, period=period, used=cached[1], limit=limit, tokens=cached[2])
         return None
     used = int(doc.get("count", 0)) if doc else 0
     tokens = int(doc.get("tokens", 0)) if doc else 0
+    _read_cache[cache_key] = (time.monotonic(), used, tokens)
     return MongoUsage(provider=provider, period_kind=kind, period=period, used=used, limit=limit, tokens=tokens)
 
 
@@ -281,12 +339,11 @@ def check_limits(required: dict[str, int] | None = None, now: datetime | None = 
     if not is_enabled():
         return True, None
 
-    if _get_collection() is None:
-        return True, None
-
     required = required or {}
     for provider in _PROVIDER_PERIODS:
         usage = get_usage(provider, now)
+        # None means Mongo is unavailable for this provider -> fail open so
+        # scanning continues (local counters still track usage).
         if usage is None:
             continue
         amount = max(0, int(required.get(provider, 0) or 0))
@@ -302,22 +359,56 @@ def check_limits(required: dict[str, int] | None = None, now: datetime | None = 
     return True, None
 
 
-def increment(provider: str, amount: int = 1, token_count: int = 0, now: datetime | None = None) -> None:
-    """Atomically add usage to a provider's current-period bucket."""
+def _ensure_writer() -> None:
+    """Start the background Mongo-write daemon thread if it isn't running."""
+    global _writer_thread
+    if _writer_thread is not None and _writer_thread.is_alive():
+        return
+    with _writer_lock:
+        if _writer_thread is not None and _writer_thread.is_alive():
+            return
+        thread = threading.Thread(target=_writer_loop, name="mongo-usage-writer", daemon=True)
+        thread.start()
+        _writer_thread = thread
+
+
+def _writer_loop() -> None:
+    while True:
+        args = _write_queue.get()
+        try:
+            _apply_increment(*args)
+        except Exception as exc:  # noqa: BLE001
+            global _last_error
+            _last_error = str(exc)
+            logger.warning("Mongo background increment failed: %s", exc)
+        finally:
+            _write_queue.task_done()
+
+
+def _apply_increment(
+    provider: str,
+    period: str,
+    kind: str,
+    amount: int,
+    token_count: int,
+    expire_at: datetime,
+    now: datetime,
+) -> None:
+    """Perform the real ``$inc`` upsert. Runs only on the writer thread."""
     if amount <= 0 and token_count <= 0:
         return
-    spec = _PROVIDER_PERIODS.get(provider)
-    if spec is None:
-        return
-    kind, _limit, _label, _unit = spec
     collection = _get_collection()
     if collection is None:
         return
-    now = now or datetime.now(UTC)
-    period = period_key(kind, now)
-    expire_at = now + timedelta(days=MONGO_USAGE_TTL_DAYS)
+    inc: dict[str, Any] = {}
+    if amount > 0:
+        inc["count"] = amount
+    if token_count > 0:
+        inc["tokens"] = token_count
+    if not inc:
+        return
     update: dict[str, Any] = {
-        "$inc": {},
+        "$inc": inc,
         "$setOnInsert": {
             "provider": provider,
             "period": period,
@@ -327,16 +418,48 @@ def increment(provider: str, amount: int = 1, token_count: int = 0, now: datetim
         },
         "$set": {"updated_at": now},
     }
-    if amount > 0:
-        update["$inc"]["count"] = amount
-    if token_count > 0:
-        update["$inc"]["tokens"] = token_count
+    collection.update_one({"provider": provider, "period": period}, update, upsert=True)
+    # Refresh the cache with the authoritative post-write count.
     try:
-        collection.update_one({"provider": provider, "period": period}, update, upsert=True)
-    except Exception as exc:  # noqa: BLE001
-        global _last_error
-        _last_error = str(exc)
-        logger.warning("Mongo increment failed: %s", exc)
+        doc = collection.find_one({"provider": provider, "period": period})
+        if doc is not None:
+            _read_cache[f"{provider}:{period}"] = (
+                time.monotonic(),
+                int(doc.get("count", 0)),
+                int(doc.get("tokens", 0)),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def increment(provider: str, amount: int = 1, token_count: int = 0, now: datetime | None = None) -> None:
+    """Queue a usage increment for a provider's current-period bucket.
+
+    The actual Mongo write happens on a background thread so the caller (and
+    therefore the scan request) never blocks on the round-trip. The in-memory
+    cache is bumped optimistically so the live meter reflects the change at once.
+    """
+    if amount <= 0 and token_count <= 0:
+        return
+    spec = _PROVIDER_PERIODS.get(provider)
+    if spec is None or not is_enabled():
+        return
+    kind = spec[0]
+    now = now or datetime.now(UTC)
+    period = period_key(kind, now)
+    expire_at = now + timedelta(days=MONGO_USAGE_TTL_DAYS)
+
+    amount = max(0, amount)
+    token_count = max(0, token_count)
+
+    # Optimistic local bump so repeated scans show live counts between reads.
+    cache_key = f"{provider}:{period}"
+    cached = _read_cache.get(cache_key)
+    if cached is not None:
+        _read_cache[cache_key] = (time.monotonic(), cached[1] + amount, cached[2] + token_count)
+
+    _ensure_writer()
+    _write_queue.put((provider, period, kind, amount, token_count, expire_at, now))
 
 
 def usage_report(now: datetime | None = None) -> dict:

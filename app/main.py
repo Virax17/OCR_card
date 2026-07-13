@@ -17,6 +17,7 @@ from app.config import (
     GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT,
     GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT,
     GEMINI_PROJECT_COUNT,
+    GEMINI_USE_IMAGE,
     MAX_UPLOAD_BYTES,
 )
 from app.extraction.candidate_extractors import extract_candidates
@@ -31,7 +32,7 @@ from app.llm.gemini_client import (
 from app.llm.usage_monitor import provider_usage_snapshot, usage_snapshot
 from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, UpdateRecordIn
 from app.storage import mongo_usage
-from app.ocr.google_vision import extract_text as google_vision_extract_text
+from app.ocr.google_vision import extract_text_combined as google_vision_extract_combined
 from app.ocr.google_vision import is_google_vision_configured
 from app.storage.db import event_dir, initialize_event_database, new_id, utc_now
 from app.storage.excel_writer import export_records
@@ -303,9 +304,13 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
                 quality_warnings=warnings,
             )
 
-        ocr_results = [google_vision_extract_text(ocr_bytes_by_side["front"], "front", event_id=event_id)]
-        if back_upload and back_bytes:
-            ocr_results.append(google_vision_extract_text(ocr_bytes_by_side["back"], "back", event_id=event_id))
+        # Stitch front+back into a single Vision call so a two-sided card costs
+        # one OCR unit instead of two (front-only stays a single call too).
+        ocr_results = google_vision_extract_combined(
+            ocr_bytes_by_side["front"],
+            ocr_bytes_by_side.get("back"),
+            event_id=event_id,
+        )
         for result in ocr_results:
             insert_ocr_result(event_id, card_id, result)
         save_ocr_audit(event_id, card_id, ocr_results)
@@ -326,14 +331,31 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
             back_text=back_ocr,
             candidate_hints=candidate_hints,
         )
-        fields = structure_card_text(
-            event_id=event_id,
-            front_text=front_ocr,
-            back_text=back_ocr,
-            candidate_hints=candidate_hints,
-            ocr_results=ocr_results,
-        )
-        if not fields:
+        if GEMINI_USE_IMAGE:
+            # preprocess_image always re-encodes to JPEG (app/imaging/preprocess.py),
+            # so the mime type for these bytes is always image/jpeg regardless of
+            # what the client originally uploaded.
+            fields = structure_card_image(
+                event_id=event_id,
+                front_image=ocr_bytes_by_side["front"],
+                front_mime_type="image/jpeg",
+                back_image=ocr_bytes_by_side.get("back"),
+                back_mime_type="image/jpeg" if ocr_bytes_by_side.get("back") else None,
+                front_text=front_ocr,
+                back_text=back_ocr,
+                candidate_hints=candidate_hints,
+                ocr_results=ocr_results,
+            )
+        else:
+            fields = structure_card_text(
+                event_id=event_id,
+                front_text=front_ocr,
+                back_text=back_ocr,
+                candidate_hints=candidate_hints,
+                ocr_results=ocr_results,
+            )
+        used_fallback = not fields
+        if used_fallback:
             fields = deterministic_fields
         save_llm_audit(event_id, card_id, fields)
         draft = record_from_llm_fields(
@@ -345,6 +367,14 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
             fields=fields,
         )
         draft.duplicate_flag = find_duplicate_flag(event_id, email=draft.email, phone=draft.phone_primary, card_id=card_id)
+        if used_fallback:
+            # Gemini returned nothing usable (quota/error) and this record
+            # came from the regex-only deterministic extractor. That extractor
+            # cannot judge semantics as well as the LLM, so never let it ship
+            # silently as "processed" — force a review flag every time.
+            draft.confidence_score = "Low"
+            if "llm_unavailable" not in draft.low_confidence_fields:
+                draft.low_confidence_fields = [*draft.low_confidence_fields, "llm_unavailable"]
         upsert_card_record(draft)
         return ProcessingResult(card=draft, status="needs_review" if draft.confidence_score == "Low" else "processed")
     except Exception as exc:
@@ -372,7 +402,8 @@ async def upload_card(
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
-    enforce_usage_limits({"google_vision": 1 + int(bool(back_bytes)), "gemini": 1})
+    # Front+back are OCR'd as one stitched image, so a card is always 1 Vision unit.
+    enforce_usage_limits({"google_vision": 1, "gemini": 1})
     return process_card(event_id, front, front_bytes, back, back_bytes)
 
 
@@ -415,10 +446,9 @@ async def ocr_scan(
     back_bytes = await read_upload(back)
     if front_bytes is None:
         raise HTTPException(status_code=400, detail="Front image is required")
-    enforce_usage_limits({"google_vision": 1 + int(bool(back_bytes))})
-    results = [google_vision_extract_text(front_bytes, "front", event_id=event_id)]
-    if back_bytes:
-        results.append(google_vision_extract_text(back_bytes, "back", event_id=event_id))
+    # Front+back are OCR'd as one stitched image, so a card is always 1 Vision unit.
+    enforce_usage_limits({"google_vision": 1})
+    results = google_vision_extract_combined(front_bytes, back_bytes, event_id=event_id)
     return {
         "event_id": event_id,
         "ocr_engine": "google_vision",

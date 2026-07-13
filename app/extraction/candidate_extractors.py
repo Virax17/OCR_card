@@ -193,9 +193,19 @@ def extract_candidates(results: list[OCRSideResult]) -> list[FieldCandidate]:
 
     for block_line, side, confidence, line_index, size_tag in all_lines:
         lower = block_line.lower()
-        if any(keyword in lower for keyword in TITLE_KEYWORDS):
+        is_title_line = any(keyword in lower for keyword in TITLE_KEYWORDS)
+        if is_title_line:
             candidates.append(_candidate("designation", block_line, max(confidence, 0.72), side, "title_keyword"))
-        if any(keyword in lower for keyword in COMPANY_KEYWORDS):
+        # A pure designation line ("Engineering Manager", "Sales Engineer")
+        # can contain a COMPANY_KEYWORDS word ("engineering", "sales") purely
+        # by keyword collision with the role title, and should not also
+        # become a company candidate. But a real legal-entity line (PT/Ltd/
+        # Pte/...) is unambiguously a company even if it also contains a
+        # title-like word (e.g. "PT SALES ENGINEERING INDONESIA"), so let
+        # the legal-entity marker override the title-line suppression.
+        if (
+            not is_title_line or LEGAL_ENTITY_RE.search(lower)
+        ) and any(keyword in lower for keyword in COMPANY_KEYWORDS):
             candidates.append(_candidate("company", block_line, max(confidence, 0.72), side, "company_keyword"))
         if side == "front" and line_index <= 4 and LEGAL_ENTITY_RE.search(lower):
             candidates.append(_candidate("company", block_line, max(confidence, 0.82), side, "top_front_company"))

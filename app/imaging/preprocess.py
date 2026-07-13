@@ -36,3 +36,33 @@ def preprocess_image(file_bytes: bytes) -> tuple[bytes, int | None, int | None, 
     quality = "Low" if warnings else "High"
     return output.getvalue(), width, height, quality, warnings
 
+
+def stitch_vertical(front_bytes: bytes, back_bytes: bytes, separator: int = 8) -> tuple[bytes, int]:
+    """Stack front (top) and back (bottom) into one JPEG for a single OCR call.
+
+    Returns ``(composite_jpeg_bytes, seam_y)`` where ``seam_y`` is the y-pixel
+    boundary between the front region (above) and the back region (below). The
+    back is resized to the front's width so x-coordinates stay comparable across
+    sides, and a small white ``separator`` band keeps the two sides from bleeding
+    into one OCR line. OCRing this composite bills a single Google Vision unit
+    for a two-sided card.
+    """
+    if Image is None:
+        raise RuntimeError("Pillow is not installed; cannot stitch images")
+
+    with Image.open(BytesIO(front_bytes)) as front_img, Image.open(BytesIO(back_bytes)) as back_img:
+        front = ImageOps.exif_transpose(front_img).convert("RGB")
+        back = ImageOps.exif_transpose(back_img).convert("RGB")
+        width = front.width
+        if back.width != width and back.width > 0:
+            new_height = max(1, round(back.height * (width / back.width)))
+            back = back.resize((width, new_height))
+        seam_y = front.height
+        total_height = front.height + separator + back.height
+        composite = Image.new("RGB", (width, total_height), (255, 255, 255))
+        composite.paste(front, (0, 0))
+        composite.paste(back, (0, front.height + separator))
+        output = BytesIO()
+        composite.save(output, format="JPEG", quality=92)
+        return output.getvalue(), seam_y
+

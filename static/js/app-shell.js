@@ -124,7 +124,9 @@ export async function loadUsage() {
   try {
     state.usage = await api.getUsage();
   } catch {
-    state.usage = null;
+    // Keep the last good usage so a single failed poll doesn't leave the panel
+    // stuck on "Usage unavailable"; only blank it if we never loaded any.
+    if (state.usage === undefined) state.usage = null;
   }
 }
 

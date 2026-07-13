@@ -47,6 +47,11 @@ def _gemini_api_keys_from_env() -> list[str]:
 
 GEMINI_API_KEYS = _gemini_api_keys_from_env()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# When true, send the card image(s) to Gemini alongside the OCR transcript
+# (multimodal) so brand/logo vs. person-name layout is judged from the actual
+# picture instead of flattened OCR text. Still exactly one Gemini call per
+# card either way, so it doesn't change free-tier request-quota usage.
+GEMINI_USE_IMAGE = os.getenv("GEMINI_USE_IMAGE", "true").lower() in {"1", "true", "yes"}
 GEMINI_PROJECT_COUNT = max(1, int(os.getenv("GEMINI_PROJECT_COUNT", str(len(GEMINI_API_KEYS) or 1))))
 GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT = int(
     os.getenv("GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT", os.getenv("GEMINI_DAILY_REQUEST_LIMIT", "50"))
