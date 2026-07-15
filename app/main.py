@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -62,8 +64,54 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.on_event("startup")
-async def startup() -> None:
+_NO_HEURISTIC_CACHE_PATHS = {"/", "/manifest.webmanifest"}
+
+
+@app.middleware("http")
+async def no_heuristic_static_caching(request, call_next):
+    """FileResponse/StaticFiles send Last-Modified/ETag but no Cache-Control,
+    so browsers fall back to heuristic freshness (commonly ~10% of the
+    Last-Modified age) — for a file last touched days ago that can mean
+    hours (or, for something untouched even longer, much more) of a stale
+    JS/CSS/HTML file being served with ZERO request ever reaching this
+    server, invisible to any server-side fix (no log line, no cache-busting
+    query string helps, nothing). Force revalidation on every request to the
+    app shell instead: still cheap (a 304 when unchanged), but guarantees a
+    real edit is never missed on the next load."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path in _NO_HEURISTIC_CACHE_PATHS:
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+# Cached in-process; recomputed only if any (path, size, mtime) actually
+# differs from last time. Avoids re-hashing the whole static/ tree on every
+# single /sw.js request (which fires on every page load) while still picking
+# up any real edit immediately.
+_static_version_cache: dict[str, str] = {"fingerprint": "", "version": ""}
+
+
+def static_assets_version() -> str:
+    """Hash every file under static/ (path + size + mtime) into one short
+    version string. Used to bust the service worker's precache automatically
+    whenever any app-shell asset changes, instead of relying on a developer
+    to remember to hand-bump a version constant in sw.js (see docs/README —
+    that manual step was silently skipped often enough that real users kept
+    running stale, sometimes-broken cached JS after a deploy)."""
+    if not STATIC_DIR.exists():
+        return "0"
+    entries = sorted(
+        f"{path.relative_to(STATIC_DIR)}:{path.stat().st_size}:{path.stat().st_mtime_ns}"
+        for path in STATIC_DIR.rglob("*")
+        if path.is_file()
+    )
+    fingerprint = "\n".join(entries)
+    if fingerprint != _static_version_cache["fingerprint"]:
+        _static_version_cache["fingerprint"] = fingerprint
+        _static_version_cache["version"] = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:12]
+    return _static_version_cache["version"]
+
+
+def _seed_mongo_on_startup() -> None:
     # All durable data lives in MongoDB now (no local disk). Create indexes and
     # seed the default event; tolerate a slow/unreachable Mongo at boot so the
     # health check can still report status instead of crashing the process.
@@ -72,6 +120,21 @@ async def startup() -> None:
         ensure_event(DEFAULT_EVENT_ID, DEFAULT_EVENT_NAME, DEFAULT_EVENT_DATE, "Local")
     except Exception:  # noqa: BLE001
         pass
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    # ensure_indexes() + ensure_event() make 10 sequential round trips over the
+    # SYNCHRONOUS pymongo driver (create_index x9, one upsert). Awaited inline
+    # here they would block the entire asyncio event loop — not just "be
+    # slow" — delaying every other request, including the very health check
+    # Render polls to decide the service has finished a cold start. Run them
+    # in a background thread instead so the app can start accepting traffic
+    # immediately; indexes/the default event exist within a second or two
+    # either way, and every reader already tolerates Mongo being briefly
+    # unavailable.
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _seed_mongo_on_startup)
 
 
 @app.get("/")
@@ -91,11 +154,17 @@ async def manifest() -> FileResponse:
 
 
 @app.get("/sw.js")
-async def service_worker() -> FileResponse:
+async def service_worker() -> Response:
     sw_path = STATIC_DIR / "sw.js"
     if not sw_path.exists():
         raise HTTPException(status_code=404, detail="Service worker is not available")
-    return FileResponse(sw_path, media_type="application/javascript")
+    content = sw_path.read_text(encoding="utf-8")
+    content = content.replace("__CACHE_VERSION__", static_assets_version())
+    # No-cache (not just no-store) so the browser always revalidates the SW
+    # script itself with the server on every check — the one request that
+    # must never be served stale, since it's what decides whether every other
+    # cached asset gets refreshed at all.
+    return Response(content=content, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health")

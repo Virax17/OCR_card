@@ -18,12 +18,29 @@ from app.extraction.field_resolver import (
 )
 from app.llm.usage_monitor import estimate_tokens, record_usage, usage_snapshot
 
-try:
-    from google import genai
-    from google.genai import types
-except Exception:  # pragma: no cover
-    genai = None
-    types = None
+# Deliberately NOT imported at module level: `google.genai` alone takes ~1.5s
+# to import (protobuf/grpc machinery), and this module is imported eagerly by
+# app/main.py at process boot — paying that cost before uvicorn can even bind
+# the port measurably slows every cold start (Render free tier especially).
+# Loaded lazily on first real use instead; cached after that first call.
+genai = None
+types = None
+_genai_load_attempted = False
+
+
+def _load_genai():
+    global genai, types, _genai_load_attempted
+    if _genai_load_attempted:
+        return genai, types
+    _genai_load_attempted = True
+    try:
+        from google import genai as _genai
+        from google.genai import types as _types
+        genai = _genai
+        types = _types
+    except Exception:  # pragma: no cover
+        pass
+    return genai, types
 
 
 FIELDS = [
@@ -256,7 +273,10 @@ def gemini_key_labels() -> list[str]:
 
 
 def is_gemini_configured() -> bool:
-    return bool(GEMINI_API_KEYS or GEMINI_API_KEY) and genai is not None
+    if not (GEMINI_API_KEYS or GEMINI_API_KEY):
+        return False
+    genai_mod, _ = _load_genai()
+    return genai_mod is not None
 
 
 # Keys that returned 429/RESOURCE_EXHAUSTED this process. A free-tier quota
@@ -1066,6 +1086,7 @@ def structure_card_image(
     as grounding/hint text — the image is authoritative, OCR fills gaps and
     lets field_evidence cite exact printed lines.
     """
+    _load_genai()
     annotated_transcript = _annotated_transcript(ocr_results)
     grounding_section = ""
     if front_text or back_text or annotated_transcript:
@@ -1295,6 +1316,7 @@ def structure_card_text(
     candidate_hints: list[dict] | None = None,
     ocr_results: list[OCRSideResult] | None = None,
 ) -> dict:
+    _load_genai()
     all_visible_text = "\n".join(part for part in [front_text, back_text or ""] if part.strip()).strip()
     annotated_transcript = _annotated_transcript(ocr_results)
     annotated_section = (

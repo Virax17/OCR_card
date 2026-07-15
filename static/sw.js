@@ -1,4 +1,8 @@
-const CACHE_VERSION = "cardscan-v13";
+// Substituted server-side (see app/main.py's service_worker() route) with a
+// hash of every static file's mtime+size, so the cache is invalidated
+// automatically whenever ANY app-shell asset changes — no more manually
+// bumping a version string by hand and shipping a stale cache to real users.
+const CACHE_VERSION = "cardscan-__CACHE_VERSION__";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
