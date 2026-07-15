@@ -243,7 +243,7 @@ REASONING STEP E — Final sanity check before output:
 Only after completing steps A–E, write the JSON output.
 """.strip()
 
-
+def _key_label(api_key: str | None, index: int | None = None) -> str | None:
     if not api_key:
         return None
     digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]
