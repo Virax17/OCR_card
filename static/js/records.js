@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { escapeHtml, formatPhoneForDisplay, debounce, confidenceLevel, isDuplicate, needsReview } from "./utils.js";
+import { escapeHtml, formatPhoneForDisplay, debounce, isDuplicate, needsReview, normalizeWebsiteUrl } from "./utils.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -220,7 +220,6 @@ function skeletonCards(count) {
 
 function reviewChipHtml(record) {
   if (isDuplicate(record)) return `<span class="status-chip duplicate">Duplicate</span>`;
-  if (confidenceLevel(record) !== "high") return `<span class="status-chip needs-review">Needs review</span>`;
   return "";
 }
 
@@ -398,7 +397,7 @@ function renderRecordView(record) {
   const email = record.email1 || record.email;
   setQuickAction("#qaCall", phone ? `tel:${phone}` : null);
   setQuickAction("#qaEmail", email ? `mailto:${email}` : null);
-  const website = record.website ? (record.website.startsWith("http") ? record.website : `https://${record.website}`) : null;
+  const website = normalizeWebsiteUrl(record.website);
   setQuickAction("#qaWebsite", website);
 
   const view = $("#recordViewMode");

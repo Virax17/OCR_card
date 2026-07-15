@@ -42,12 +42,23 @@ document.addEventListener("DOMContentLoaded", async () => {
   handleRouteChange();
 
   await initQueue();
-  await checkHealth();
-  await loadEvents();
-  await loadRecords();
-  await loadUsage();
+
+  const healthPromise = checkHealth();
+  try {
+    await loadEvents();
+  } catch {
+    state.events = [];
+    state.eventId = null;
+    refreshEventLabel(state);
+  }
+
   state.loading = false;
   handleRouteChange();
+
+  void Promise.allSettled([healthPromise, loadRecords(), loadUsage()]).then(() => {
+    handleRouteChange();
+  });
+
   registerServiceWorker();
 });
 

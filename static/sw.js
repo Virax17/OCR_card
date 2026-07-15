@@ -1,4 +1,4 @@
-const CACHE_VERSION = "cardscan-v12";
+const CACHE_VERSION = "cardscan-v13";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",

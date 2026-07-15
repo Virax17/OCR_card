@@ -121,6 +121,68 @@ Business-card layout rules learned from local samples:
 - If the card has multiple offices on the back, do not replace the front contact phone/mobile/email with back-side branch office numbers.
 """.strip()
 
+# The single most common extraction mistake is swapping/merging the person's
+# name with the company/business name. This gets its own dedicated,
+# step-by-step procedure (rather than folding it into the general rules
+# above) because a short bullet list wasn't enough to stop the model from
+# occasionally picking the brand line as the name or vice versa.
+NAME_VS_COMPANY_PROCEDURE = """
+Name vs. Business/Company — follow this procedure in order every time, because
+mixing these two up is the most common mistake on this task:
+
+Step 1. List every distinct printed line on the front side (and back side only
+if the front has no company line at all).
+
+Step 2. Mark a line as a COMPANY candidate if ANY of the following is true:
+   - It contains a legal-entity suffix or prefix: PT, Pvt, Ltd, LLC, Inc, LLP,
+     Pte, Tbk, Sdn, Bhd, Co, Corp, Corporation, GmbH, S.A., S.p.A., B.V.
+   - It contains a generic business noun: Group, Engineering, Industrial,
+     Industries, Services, Solutions, Technologies, Systems, Trading, Supply,
+     Manufacturing, Marine, Contractors, Oil, Gas, Energy, Construction,
+     Logistics, Metal, Works, Radiator, Enterprises, Consultancy, Ventures.
+   - It is the top-most stylized/logo text on the front side (brands are
+     almost always at the very top, even a single stylized word like
+     "PETROSEA" or "TOKKI").
+   - It is repeated on the back side as a header/letterhead — a company name
+     is the one constant across both sides; a person's name is not.
+
+Step 3. Mark a line as a PERSON-NAME candidate if ALL of the following are
+true:
+   - It is 1-5 words, shaped like a human name (optionally with an honorific
+     like Mr./Mrs./Ms./Dr./Ir./Prof. or post-nominal initials).
+   - It contains NO legal-entity suffix and NO generic business noun from
+     Step 2.
+   - It sits directly above or below a designation/job-title line (Director,
+     Manager, Engineer, Officer, Sales, Procurement, Founder, CEO, etc.), OR
+     it is visually distinct in position/size from the top brand line.
+   - It is not identical (ignoring case/spacing) to whatever line you already
+     marked as the company in Step 2.
+
+Step 4. Resolve conflicts — a line CANNOT be both:
+   - If a line satisfies both Step 2 and Step 3 (rare), Step 2 always wins:
+     treat it as the company, not the name. A stylized all-caps single word
+     at the top of the card is a brand even if it superficially resembles a
+     name.
+   - If the only candidate for "name" is the same text as the company line,
+     the card has no separate person name — return name = null. Do NOT copy
+     the company name into the name field just to fill it in.
+   - A line combining both on one row with a separator (e.g. "John Doe,
+     Sales Manager" or "John Doe — Regional Manager") must be split: the part
+     before the separator that reads as a human name is `name`, the part
+     after is `designation`. Never leave the combined, unsplit text in either
+     field.
+   - An honorific prefix (Mr./Mrs./Ms./Dr./Ir./Prof./Haji) or post-nominal
+     letters (e.g. "B.Eng", "M.T.") stay attached to the name line and do not
+     disqualify it from being a person name.
+
+Step 5. Before finalizing, sanity-check both fields against each other:
+   - `name` must never equal `business`/`company` (case-insensitively).
+   - `business`/`company` must never be a personal name with no legal suffix
+     and no business noun and no top-of-card logo positioning — if nothing on
+     the card qualifies as a company under Step 2, return business = null
+     rather than guessing a person's name is the company.
+""".strip()
+
 
 def _key_label(api_key: str | None, index: int | None = None) -> str | None:
     if not api_key:
@@ -524,21 +586,11 @@ def _website_score(website: str, brand_tokens: set[str], line: str, email_domain
     return score, -len(domain)
 
 
+_KNOWN_DIAL_CODES = {dial_code for _country, _iso, dial_code, _hints in COUNTRY_HINTS}
+
+
 def _country_code_from_phone(*values: str | None) -> str | None:
-    known_codes = {
-        "+1",
-        "+44",
-        "+60",
-        "+62",
-        "+65",
-        "+91",
-        "+965",
-        "+966",
-        "+968",
-        "+971",
-        "+973",
-        "+974",
-    }
+    known_codes = _KNOWN_DIAL_CODES
     for value in values:
         if not value:
             continue
@@ -996,6 +1048,8 @@ Rules:
 - Contact1 is main direct/mobile, Contact2 is office/telephone, Contact3 is fax or another printed number — all digits only, with country calling code when visible or inferable.
 - Country must be the full country name, not an ISO code (e.g. Indonesia, not ID).
 - Category must be the single closest match to the company's business; never copy a job title or address into category.
+
+{NAME_VS_COMPANY_PROCEDURE}
 {grounding_section}
 {FEW_SHOT_EXAMPLE}
 """.strip()
@@ -1122,6 +1176,33 @@ Annotated OCR lines:
 Correct extraction: business="TOKKI", name="FITRI ALFIANA", designation="Procurement Officer".
 Wrong extraction: name="TOKKI". A single all-caps brand token is a company/brand unless it is
 clearly printed as a person's personal-name line.
+
+Example — a combined name+title line must be split, not left merged or dropped:
+Annotated OCR lines:
+[front L0 | top | large] Babcock & Wilcox
+[front L1 | middle | normal] John Doe, Regional Manager
+[front L2 | bottom | normal] T: +91 22 4126 6030  E: john.doe@babcock.com
+Correct extraction: business="Babcock & Wilcox", name="John Doe", designation="Regional Manager".
+Wrong extraction: name="John Doe, Regional Manager" (unsplit) or name=null (dropped). Split on the
+comma/dash separator: the human-name part is name, the role part is designation.
+
+Example — honorific and post-nominal letters stay attached to the name:
+Annotated OCR lines:
+[front L0 | top | large] CESCO
+[front L1 | middle | large] Ir. Bambang Suryanto, M.T.
+[front L2 | middle | normal] Plant Manager
+Correct extraction: business="CESCO", name="Ir. Bambang Suryanto, M.T.", designation="Plant Manager".
+An honorific (Ir./Dr./Mr./Mrs./Prof./Haji) or post-nominal (M.T., B.Eng) does not disqualify a line
+from being the name — do not strip it and do not mistake it for a business/legal suffix.
+
+Example — an individual card with no company at all:
+Annotated OCR lines:
+[front L0 | middle | large] Priya Sharma
+[front L1 | middle | normal] Independent Consultant
+[front L2 | bottom | normal] M: +91 98765 43210  E: priya.sharma@gmail.com
+Correct extraction: name="Priya Sharma", designation="Independent Consultant", business=null.
+There is no legal-entity line or business noun anywhere on the card, so business must be null —
+never promote the name or a generic title into the business/company field just to fill it in.
 """.strip()
 
 
@@ -1193,6 +1274,8 @@ Rules:
 - Zip_code is ONLY the postal/PIN code printed as part of the address block (a short 4-8 digit code, e.g. a 6-digit Indian PIN or a 5-digit US ZIP). Never take a zip_code value from inside a phone number, mobile number, or fax number — those are longer digit runs typically preceded by phone labels (T/Tel/M/Mob/F/Fax) or a country code, and are not postal codes.
 - Category must be exactly one of:
 {", ".join(BUSINESS_CATEGORIES)}
+
+{NAME_VS_COMPANY_PROCEDURE}
 {annotated_section}
 OCR front:
 {front_text or ""}

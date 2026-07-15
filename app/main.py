@@ -423,13 +423,18 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         )
         draft.duplicate_flag = find_duplicate_flag(event_id, email=draft.email, phone=draft.phone_primary, card_id=card_id)
         if used_fallback:
-            # Gemini returned nothing usable (quota/error) and this record
-            # came from the regex-only deterministic extractor. That extractor
-            # cannot judge semantics as well as the LLM, so never let it ship
-            # silently as "processed" — force a review flag every time.
-            draft.confidence_score = "Low"
+            # Gemini returned nothing usable (quota/error, or a burst of rapid
+            # scans briefly exceeded the local per-minute budget) and this
+            # record came from the regex-only deterministic extractor. Always
+            # tag it so it's traceable, but only downgrade confidence one
+            # notch rather than blanket-forcing "Low" — a deterministic
+            # extraction that actually captured name/company/phone/email is
+            # still useful and shouldn't flood every card in a busy scanning
+            # session into "needs review".
             if "llm_unavailable" not in draft.low_confidence_fields:
                 draft.low_confidence_fields = [*draft.low_confidence_fields, "llm_unavailable"]
+            if draft.confidence_score == "High":
+                draft.confidence_score = "Medium"
         upsert_card_record(draft)
         return ProcessingResult(card=draft, status="needs_review" if draft.confidence_score == "Low" else "processed")
     except Exception as exc:

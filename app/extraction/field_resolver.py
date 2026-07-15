@@ -20,18 +20,77 @@ def normalize_email(value: str | None) -> str | None:
 
 
 COUNTRY_HINTS = [
-    ("India", "IN", "+91", ["india", "bharat", "maharashtra", "gujarat", "mumbai", "pune", "delhi", "chennai", "kolkata", "bengaluru", "bangalore"]),
+    # South Asia
+    ("India", "IN", "+91", ["india", "bharat", "maharashtra", "gujarat", "mumbai", "pune", "delhi", "chennai", "kolkata", "bengaluru", "bangalore", "hyderabad", "ahmedabad"]),
+    ("Pakistan", "PK", "+92", ["pakistan", "karachi", "lahore", "islamabad"]),
+    ("Bangladesh", "BD", "+880", ["bangladesh", "dhaka", "chittagong"]),
+    ("Sri Lanka", "LK", "+94", ["sri lanka", "colombo"]),
+    ("Nepal", "NP", "+977", ["nepal", "kathmandu"]),
+    # Southeast Asia
     ("Indonesia", "ID", "+62", ["indonesia", "jakarta", "balikpapan", "kalimantan", "papua", "sorong", "bekasi", "banten", "cilegon", "gresik", "cikarang"]),
+    ("Singapore", "SG", "+65", ["singapore"]),
+    ("Malaysia", "MY", "+60", ["malaysia", "kuala lumpur", "penang", "johor"]),
+    ("Thailand", "TH", "+66", ["thailand", "bangkok"]),
+    ("Vietnam", "VN", "+84", ["vietnam", "hanoi", "ho chi minh", "saigon"]),
+    ("Philippines", "PH", "+63", ["philippines", "manila", "cebu"]),
+    # East Asia
+    ("China", "CN", "+86", ["china", "beijing", "shanghai", "shenzhen", "guangzhou"]),
+    ("Hong Kong", "HK", "+852", ["hong kong"]),
+    ("Taiwan", "TW", "+886", ["taiwan", "taipei"]),
+    ("Japan", "JP", "+81", ["japan", "tokyo", "osaka", "yokohama"]),
+    ("South Korea", "KR", "+82", ["korea", "seoul", "busan"]),
+    # Middle East
     ("United Arab Emirates", "AE", "+971", ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah"]),
     ("Saudi Arabia", "SA", "+966", ["saudi", "ksa", "riyadh", "jeddah", "dammam"]),
     ("Qatar", "QA", "+974", ["qatar", "doha"]),
     ("Oman", "OM", "+968", ["oman", "muscat"]),
     ("Kuwait", "KW", "+965", ["kuwait"]),
     ("Bahrain", "BH", "+973", ["bahrain"]),
+    ("Turkey", "TR", "+90", ["turkey", "istanbul", "ankara"]),
+    ("Iran", "IR", "+98", ["iran", "tehran"]),
+    ("Iraq", "IQ", "+964", ["iraq", "baghdad"]),
+    ("Jordan", "JO", "+962", ["jordan", "amman"]),
+    ("Lebanon", "LB", "+961", ["lebanon", "beirut"]),
+    ("Israel", "IL", "+972", ["israel", "tel aviv", "jerusalem"]),
+    # Africa
+    ("Egypt", "EG", "+20", ["egypt", "cairo", "alexandria"]),
+    ("South Africa", "ZA", "+27", ["south africa", "johannesburg", "cape town", "durban", "pretoria"]),
+    ("Nigeria", "NG", "+234", ["nigeria", "lagos", "abuja"]),
+    ("Kenya", "KE", "+254", ["kenya", "nairobi"]),
+    # Europe
+    ("United Kingdom", "GB", "+44", ["uk", "united kingdom", "england", "london", "scotland", "wales"]),
+    ("Germany", "DE", "+49", ["germany", "berlin", "munich", "frankfurt", "hamburg"]),
+    ("France", "FR", "+33", ["france", "paris", "lyon", "marseille"]),
+    ("Italy", "IT", "+39", ["italy", "rome", "milan", "turin"]),
+    ("Spain", "ES", "+34", ["spain", "madrid", "barcelona"]),
+    ("Portugal", "PT", "+351", ["portugal", "lisbon", "porto"]),
+    ("Netherlands", "NL", "+31", ["netherlands", "amsterdam", "rotterdam", "the hague"]),
+    ("Belgium", "BE", "+32", ["belgium", "brussels", "antwerp"]),
+    ("Switzerland", "CH", "+41", ["switzerland", "zurich", "geneva", "basel"]),
+    ("Austria", "AT", "+43", ["austria", "vienna"]),
+    ("Sweden", "SE", "+46", ["sweden", "stockholm", "gothenburg"]),
+    ("Norway", "NO", "+47", ["norway", "oslo"]),
+    ("Denmark", "DK", "+45", ["denmark", "copenhagen"]),
+    ("Finland", "FI", "+358", ["finland", "helsinki"]),
+    ("Poland", "PL", "+48", ["poland", "warsaw", "krakow"]),
+    ("Ireland", "IE", "+353", ["ireland", "dublin"]),
+    ("Greece", "GR", "+30", ["greece", "athens"]),
+    ("Russia", "RU", "+7", ["russia", "moscow", "saint petersburg", "st petersburg"]),
+    # Americas
     ("United States", "US", "+1", ["usa", "united states", "america", "california", "texas", "new york"]),
-    ("United Kingdom", "GB", "+44", ["uk", "united kingdom", "england", "london"]),
-    ("Singapore", "SG", "+65", ["singapore"]),
-    ("Malaysia", "MY", "+60", ["malaysia", "kuala lumpur"]),
+    # Canada also dials +1 (shared NANP with the US); this text-hint entry
+    # only fires on an explicit Canadian city/name, so it never overrides a
+    # phone-number-based +1 match, which stays ambiguous between the two.
+    ("Canada", "CA", "+1", ["canada", "toronto", "vancouver", "montreal", "ontario"]),
+    ("Mexico", "MX", "+52", ["mexico", "mexico city", "guadalajara"]),
+    ("Brazil", "BR", "+55", ["brazil", "sao paulo", "rio de janeiro"]),
+    ("Argentina", "AR", "+54", ["argentina", "buenos aires"]),
+    ("Chile", "CL", "+56", ["chile", "santiago"]),
+    ("Colombia", "CO", "+57", ["colombia", "bogota"]),
+    ("Peru", "PE", "+51", ["peru", "lima"]),
+    # Oceania
+    ("Australia", "AU", "+61", ["australia", "sydney", "melbourne", "brisbane", "perth"]),
+    ("New Zealand", "NZ", "+64", ["new zealand", "auckland", "wellington"]),
 ]
 
 

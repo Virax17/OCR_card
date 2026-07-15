@@ -46,10 +46,6 @@ export function wireDashboard() {
     const { showToast } = await import("./app-shell.js");
     showToast("Terminated queue processing.", "info");
   });
-  $("#queueBtn")?.addEventListener("click", async () => {
-    const { openQueueSheet } = await import("./process-sheet.js");
-    openQueueSheet();
-  });
   // Registered once here (not inside render) so a completed card updates the
   // pill no matter which screen is active when it finishes.
   window.addEventListener("queueItemProcessed", handleQueueItemProcessed);
@@ -58,7 +54,6 @@ export function wireDashboard() {
 export async function refreshDashboard(state) {
   renderHero(state);
   renderProcessingPill(state);
-  renderQueueButton(state);
   renderUsage(state);
 }
 
@@ -161,21 +156,6 @@ function renderProcessingPill(state) {
   }
 }
 
-function renderQueueButton(state) {
-  const btn = $("#queueBtn");
-  const text = $("#queueBtnText");
-  if (!btn || !text) return;
-
-  const queue = getQueueSnapshot();
-  const total = queue.length;
-
-  if (total > 0) {
-    text.textContent = `Queue (${total})`;
-    btn.hidden = false;
-  } else {
-    btn.hidden = true;
-  }
-}
 
 function renderUsage(state) {
   const el = $("#usageMeters");

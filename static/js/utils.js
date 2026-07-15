@@ -14,7 +14,16 @@ export function formatPhoneForDisplay(value, countryCode) {
   if (!digits) return String(value).trim();
   let codeDigits = String(countryCode || "").replace(/\D/g, "");
   if (!codeDigits && String(value).trim().startsWith("+")) {
-    const knownCodes = ["91", "62", "971", "966", "974", "968", "965", "973", "1", "44", "65", "60"];
+    // Same dial-code set as app/extraction/field_resolver.py's COUNTRY_HINTS
+    // (kept in sync manually), longest-first so no shorter code shadows a
+    // longer one that's actually a prefix of it (e.g. "971" before "97").
+    const knownCodes = [
+      "880", "886", "852", "351", "353", "358", "234", "254", "962", "963", "964", "965", "966", "967", "968", "971", "972", "973", "974", "977",
+      "20", "27", "30", "31", "32", "33", "34", "39", "41", "43", "44", "45", "46", "47", "48", "49",
+      "51", "52", "54", "55", "56", "57", "60", "61", "62", "63", "64", "65", "66",
+      "81", "82", "84", "86", "90", "91", "92", "94", "98",
+      "1", "7",
+    ].sort((a, b) => b.length - a.length);
     codeDigits = knownCodes.find((code) => digits.startsWith(code)) || "";
   }
   let national = digits;
@@ -42,11 +51,28 @@ export function isDuplicate(record) {
   return String(record.duplicate_flag || "No").toLowerCase() !== "no";
 }
 
+export function normalizeWebsiteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(candidate);
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 // Single definition of "needs your attention" shared by Home's callout card,
 // the Records filter, and the review-queue mode — a record qualifies for any
 // of those surfaces if and only if this returns true.
+//
+// Confidence-based flagging is disabled for now: the underlying
+// confidence_score has been too noisy/unreliable in practice (see
+// app/main.py's record_from_llm_fields), so it was flooding this with false
+// positives. Only real duplicates are surfaced until that's sorted out.
 export function needsReview(record) {
-  return isDuplicate(record) || confidenceLevel(record) === "low";
+  return isDuplicate(record);
 }
 
 const AVATAR_TINTS = [
