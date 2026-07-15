@@ -30,11 +30,11 @@ export function listRecords(eventId) {
   return fetchJson(`/events/${eventId}/cards`);
 }
 
-export function uploadCard(eventId, frontBlob, frontName, backBlob, backName) {
+export function uploadCard(eventId, frontBlob, frontName, backBlob, backName, signal) {
   const form = new FormData();
   form.append("front", frontBlob, frontName || "front.jpg");
   if (backBlob) form.append("back", backBlob, backName || "back.jpg");
-  return fetchJson(`/events/${eventId}/cards`, { method: "POST", body: form });
+  return fetchJson(`/events/${eventId}/cards`, { method: "POST", body: form, signal });
 }
 
 export function patchRecord(eventId, cardId, values) {
@@ -47,6 +47,10 @@ export function patchRecord(eventId, cardId, values) {
 
 export function resetCards(eventId) {
   return fetchJson(`/events/${eventId}/cards`, { method: "DELETE" });
+}
+
+export function deleteEvent(eventId) {
+  return fetchJson(`/events/${eventId}`, { method: "DELETE" });
 }
 
 export function getUsage() {

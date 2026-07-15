@@ -1,10 +1,13 @@
 import * as api from "./api.js";
-import { escapeHtml, formatPhoneForDisplay, debounce, confidenceLevel, isDuplicate } from "./utils.js";
+import { escapeHtml, formatPhoneForDisplay, debounce, confidenceLevel, isDuplicate, needsReview } from "./utils.js";
 
 const $ = (selector) => document.querySelector(selector);
 
 let editMode = false;
 let activeRecord = null;
+// Review-queue state: null when the sheet was opened normally; otherwise
+// { records, index } so Previous/Next can step through the flagged set.
+let reviewQueue = null;
 
 export function wireRecordsScreen() {
   $("#recordSearch").addEventListener("input", debounce(async () => {
@@ -18,8 +21,7 @@ export function wireRecordsScreen() {
       const { state } = await import("./app-shell.js");
       document.querySelectorAll('.chip[data-filter]').forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
-      state.filters.duplicatesOnly = chip.dataset.filter === "duplicates";
-      state.filters.lowConfidenceOnly = chip.dataset.filter === "low";
+      state.filters.needsReviewOnly = chip.dataset.filter === "needs-review";
       renderRecords(state);
     });
   });
@@ -48,6 +50,7 @@ export function wireRecordsScreen() {
 
   wireResetConfirm();
   wireRecordSheet();
+  wireReviewQueue();
   wireImageDialog();
 }
 
@@ -96,6 +99,7 @@ export async function refreshRecords(state) {
 export function renderRecords(state) {
   const filtered = applyFilters(state);
   $("#recordsCountBadge").textContent = state.records.length ? `(${filtered.length}/${state.records.length})` : "";
+  renderReviewAllBanner(state, filtered);
 
   const emptyEl = $("#recordsEmptyState");
   const listEl = $("#recordsList");
@@ -121,6 +125,24 @@ export function renderRecords(state) {
   tableWrapEl.style.display = "";
   renderMobileList(state, filtered);
   renderDesktopTable(state, filtered);
+}
+
+// A "Review all" shortcut when the Needs-review filter is active — jumps
+// straight into the edit-first Next/Previous flow instead of tapping every
+// flagged row one at a time.
+function renderReviewAllBanner(state, filtered) {
+  const wrap = $("#recordsReviewAllWrap");
+  if (!wrap) return;
+  if (state.loading || !state.filters.needsReviewOnly || !filtered.length) {
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.innerHTML = `
+    <button id="recordsReviewAllBtn" class="btn outline block" type="button" style="margin:var(--space-2) 0 var(--space-3)">
+      Review all ${filtered.length} &rarr;
+    </button>
+  `;
+  $("#recordsReviewAllBtn").addEventListener("click", () => openReviewQueue(filtered));
 }
 
 function emptyStateHtml(state) {
@@ -152,9 +174,8 @@ function wireEmptyStateScan(container) {
 
 function applyFilters(state) {
   let list = [...state.records];
-  const { search, duplicatesOnly, lowConfidenceOnly } = state.filters;
-  if (duplicatesOnly) list = list.filter(isDuplicate);
-  if (lowConfidenceOnly) list = list.filter((r) => confidenceLevel(r) !== "high");
+  const { search, needsReviewOnly } = state.filters;
+  if (needsReviewOnly) list = list.filter(needsReview);
   if (search) {
     list = list.filter((r) => {
       const haystack = [r.name, r.company, r.business, r.email1, r.email, r.contact1, r.contact2, r.phone_primary]
@@ -197,9 +218,14 @@ function skeletonCards(count) {
   `).join("");
 }
 
+function reviewChipHtml(record) {
+  if (isDuplicate(record)) return `<span class="status-chip duplicate">Duplicate</span>`;
+  if (confidenceLevel(record) !== "high") return `<span class="status-chip needs-review">Needs review</span>`;
+  return "";
+}
+
 function cardHtml(state, record) {
   const image = record.front_image_filename ? api.imageUrl(state.eventId, record.front_image_filename) : "";
-  const level = confidenceLevel(record);
   const phone = formatPhoneForDisplay(record.contact1 || record.mobile_number || record.phone_primary, record.country_code);
   const email = record.email1 || record.email || "";
   return `
@@ -211,8 +237,7 @@ function cardHtml(state, record) {
         <div class="contact-card-sub">${escapeHtml([phone, email].filter(Boolean).join(" · "))}</div>
       </div>
       <div class="contact-card-side">
-        <span class="confidence-dot ${level}"></span>
-        ${isDuplicate(record) ? `<span class="dup-badge">DUP</span>` : ""}
+        ${reviewChipHtml(record)}
       </div>
     </div>
   `;
@@ -235,7 +260,7 @@ function renderDesktopTable(state, records) {
         <td>${escapeHtml(record.category || "")}</td>
         <td>${escapeHtml(phone)}</td>
         <td>${escapeHtml(record.email1 || record.email || "")}</td>
-        <td><span class="badge ${escapeHtml(record.confidence_score || "")}">${escapeHtml(record.confidence_score || "")}</span></td>
+        <td>${reviewChipHtml(record) || `<span class="status-chip reviewed">Reviewed</span>`}</td>
       </tr>
     `;
   }).join("");
@@ -274,7 +299,7 @@ function wireRecordSheet() {
   });
   $("#recordEditToggleBtn").addEventListener("click", () => setEditMode(true));
   $("#recordEditCancelBtn").addEventListener("click", () => setEditMode(false));
-  $("#recordEditSaveBtn").addEventListener("click", saveRecordEdit);
+  $("#recordEditSaveBtn").addEventListener("click", () => saveRecordEdit());
   $("#recordSheetImage").addEventListener("click", () => {
     if (activeRecord?.__imageUrl) openImage(activeRecord.__imageUrl);
   });
@@ -284,15 +309,82 @@ function wireRecordSheet() {
 function closeRecordSheet() {
   $("#recordSheet").close();
   setEditMode(false);
+  exitReviewQueue();
 }
 
 export async function openRecordDetail(record) {
+  exitReviewQueue();
   const { state } = await import("./app-shell.js");
   activeRecord = record;
   activeRecord.__imageUrl = record.front_image_filename ? api.imageUrl(state.eventId, record.front_image_filename) : "";
   renderRecordView(record);
   setEditMode(false);
   $("#recordSheet").showModal();
+}
+
+// ---- Review-queue mode: edit-first, Next/Previous through flagged records ----
+
+function wireReviewQueue() {
+  $("#recordReviewPrevBtn").addEventListener("click", () => stepReviewQueue(-1));
+  $("#recordReviewNextBtn").addEventListener("click", () => stepReviewQueue(1));
+}
+
+// Opens the record sheet pre-filtered to `records`, edit form shown by
+// default, with Previous/Next controls — the direct fix for "ability to
+// correct the mistakes" instead of hunting through the list one at a time.
+export async function openReviewQueue(records) {
+  if (!records || !records.length) return;
+  reviewQueue = { records, index: 0 };
+  await openReviewRecord(0);
+}
+
+async function openReviewRecord(index) {
+  const record = reviewQueue.records[index];
+  const { state } = await import("./app-shell.js");
+  activeRecord = record;
+  activeRecord.__imageUrl = record.front_image_filename ? api.imageUrl(state.eventId, record.front_image_filename) : "";
+  renderRecordView(record);
+  setEditMode(true);
+  renderReviewBar();
+  if (!$("#recordSheet").open) $("#recordSheet").showModal();
+}
+
+function renderReviewBar() {
+  const bar = $("#recordReviewBar");
+  if (!reviewQueue) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const { records, index } = reviewQueue;
+  $("#recordReviewProgress").textContent = `${index + 1} of ${records.length} need review`;
+  $("#recordReviewPrevBtn").disabled = index === 0;
+  $("#recordReviewNextBtn").textContent = index === records.length - 1 ? "Done" : "Save & next →";
+}
+
+// Saves the current record's edits (if any were made), then advances to the
+// next flagged record or, past the last one, closes the sheet.
+async function stepReviewQueue(direction) {
+  if (!reviewQueue) return;
+  if (direction > 0) {
+    const saved = await saveRecordEdit({ silent: true });
+    if (!saved) return; // save failed — stay put so the user can retry/fix
+  }
+  const nextIndex = reviewQueue.index + direction;
+  if (nextIndex < 0) return;
+  if (nextIndex >= reviewQueue.records.length) {
+    const { showToast } = await import("./app-shell.js");
+    $("#recordSheet").close();
+    showToast("All caught up — nothing left to review.", "success");
+    return;
+  }
+  reviewQueue.index = nextIndex;
+  await openReviewRecord(nextIndex);
+}
+
+function exitReviewQueue() {
+  reviewQueue = null;
+  $("#recordReviewBar").hidden = true;
 }
 
 function renderRecordView(record) {
@@ -339,8 +431,11 @@ function setEditMode(on) {
   editMode = on;
   $("#recordViewMode").hidden = on;
   $("#recordEditForm").hidden = !on;
-  $("#recordSheetFooter").hidden = !on;
-  $("#recordEditToggleBtn").hidden = on;
+  // In review-queue mode the dedicated Previous/Next bar replaces the normal
+  // Cancel/Save footer and edit-toggle pencil entirely (Next itself saves),
+  // so there's only ever one set of controls on screen at a time.
+  $("#recordSheetFooter").hidden = !on || Boolean(reviewQueue);
+  $("#recordEditToggleBtn").hidden = on || Boolean(reviewQueue);
   if (on) renderRecordEditForm(activeRecord);
 }
 
@@ -370,7 +465,7 @@ function renderRecordEditForm(record) {
   `;
 }
 
-async function saveRecordEdit() {
+async function saveRecordEdit({ silent = false } = {}) {
   const { state, loadRecords, showToast } = await import("./app-shell.js");
   const cardId = $("#editCardId").value;
   const values = {
@@ -392,20 +487,22 @@ async function saveRecordEdit() {
   const previous = { ...activeRecord };
   Object.assign(activeRecord, values);
   renderRecordView(activeRecord);
-  setEditMode(false);
+  if (!silent) setEditMode(false);
   const index = state.records.findIndex((r) => r.card_id === cardId);
   if (index >= 0) state.records[index] = { ...state.records[index], ...values };
   renderRecords(state);
   try {
     if (!state.online) throw new Error("Requires connection");
     await api.patchRecord(state.eventId, cardId, values);
-    showToast("Record saved.", "success");
+    if (!silent) showToast("Record saved.", "success");
     await loadRecords();
+    return true;
   } catch (error) {
     Object.assign(activeRecord, previous);
     if (index >= 0) state.records[index] = previous;
     renderRecords(state);
     showToast(error.message || "Save failed.", "error");
+    return false;
   }
 }
 

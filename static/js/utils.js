@@ -42,6 +42,13 @@ export function isDuplicate(record) {
   return String(record.duplicate_flag || "No").toLowerCase() !== "no";
 }
 
+// Single definition of "needs your attention" shared by Home's callout card,
+// the Records filter, and the review-queue mode — a record qualifies for any
+// of those surfaces if and only if this returns true.
+export function needsReview(record) {
+  return isDuplicate(record) || confidenceLevel(record) === "low";
+}
+
 const AVATAR_TINTS = [
   { bg: "#e7f7f5", fg: "#0b5c55" }, // teal
   { bg: "#fdecd9", fg: "#b1560c" }, // amber

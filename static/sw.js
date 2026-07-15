@@ -1,4 +1,4 @@
-const CACHE_VERSION = "cardscan-v10";
+const CACHE_VERSION = "cardscan-v12";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
@@ -25,9 +25,10 @@ const PRECACHE_URLS = [
   "/static/fonts/ibm-plex-mono-500.woff2",
 ];
 
-const NETWORK_FIRST_PATTERNS = [/^\/events$/, /^\/events\/[^/]+\/cards$/, /^\/llm-usage$/, /^\/health$/];
-const CACHE_FIRST_PATTERN = /^\/events\/[^/]+\/images\//;
-
+// Only the immutable app-shell assets (JS/CSS/fonts/icons) are cached, so the
+// PWA stays installable. NOTHING data-related is cached in the browser anymore:
+// events, cards, usage, health, images and downloads all go straight to the
+// network every time, so the UI never shows stale data.
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(PRECACHE_URLS)).then(() => self.skipWaiting())
@@ -47,22 +48,32 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
-  if (url.pathname === "/download" || url.pathname.endsWith("/download")) return;
-
-  if (CACHE_FIRST_PATTERN.test(url.pathname)) {
-    event.respondWith(cacheFirst(request));
-    return;
-  }
-
-  if (NETWORK_FIRST_PATTERNS.some((pattern) => pattern.test(url.pathname))) {
+  // Always refresh the app shell from the network when online so changes to
+  // index.html and the top-level UI are not stuck behind an old cached shell.
+  if (request.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html") {
     event.respondWith(networkFirst(request));
     return;
   }
 
+  // Cache-first ONLY for static app-shell assets. Everything else (all data
+  // endpoints, images, downloads) is left to the network with no SW caching.
   if (PRECACHE_URLS.includes(url.pathname) || url.pathname.startsWith("/static/")) {
     event.respondWith(cacheFirst(request));
   }
 });
+
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE_VERSION);
+  try {
+    const response = await fetch(request);
+    if (response.ok) cache.put(request, response.clone());
+    return response;
+  } catch {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw new Error("Offline and no cached response available");
+  }
+}
 
 async function cacheFirst(request) {
   const cache = await caches.open(CACHE_VERSION);
@@ -71,17 +82,4 @@ async function cacheFirst(request) {
   const response = await fetch(request);
   if (response.ok) cache.put(request, response.clone());
   return response;
-}
-
-async function networkFirst(request) {
-  const cache = await caches.open(CACHE_VERSION);
-  try {
-    const response = await fetch(request);
-    if (response.ok) cache.put(request, response.clone());
-    return response;
-  } catch (error) {
-    const cached = await cache.match(request);
-    if (cached) return cached;
-    throw error;
-  }
 }

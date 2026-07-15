@@ -85,6 +85,14 @@ GOOGLE_VISION_LANGUAGE_HINTS = [
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 
+# Card images are stored in MongoDB (GridFS), not on disk. To keep the database
+# small we store a COMPRESSED copy of each upload, not the full-size original:
+# downscale so the longest edge is at most IMAGE_STORE_MAX_EDGE px, re-encoded as
+# JPEG at IMAGE_STORE_QUALITY. This only affects the stored/displayed image — OCR
+# still runs on the higher-fidelity preprocessed bytes, so accuracy is unchanged.
+IMAGE_STORE_MAX_EDGE = int(os.getenv("IMAGE_STORE_MAX_EDGE", "1600"))
+IMAGE_STORE_QUALITY = int(os.getenv("IMAGE_STORE_QUALITY", "80"))
+
 # MongoDB — persistent, restart-surviving usage counters with per-period buckets.
 # Unset MONGODB_URI (or MONGO_USAGE_ENABLED=false) disables the feature entirely;
 # processing then falls back to the local SQLite-only behaviour.

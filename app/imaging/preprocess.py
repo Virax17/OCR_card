@@ -2,12 +2,49 @@ from __future__ import annotations
 
 from io import BytesIO
 
+from app.config import IMAGE_STORE_MAX_EDGE, IMAGE_STORE_QUALITY
+
 try:
     from PIL import Image, ImageEnhance, ImageOps
 except Exception:  # pragma: no cover - dependency checked at runtime
     Image = None
     ImageEnhance = None
     ImageOps = None
+
+
+def compress_for_storage(
+    file_bytes: bytes,
+    max_edge: int = IMAGE_STORE_MAX_EDGE,
+    quality: int = IMAGE_STORE_QUALITY,
+) -> bytes:
+    """Return a smaller JPEG of the upload for durable storage in GridFS.
+
+    Bakes in EXIF rotation (then drops metadata), downscales so the longest edge
+    is at most ``max_edge`` px, and re-encodes JPEG at ``quality`` with optimize
+    on. The result is typically several times smaller than a phone-camera
+    original. Used only for the STORED/displayed copy — OCR runs separately on
+    ``preprocess_image`` output, so this never affects extraction accuracy.
+
+    Falls back to the original bytes if Pillow is unavailable or the image can't
+    be decoded, so a bad input never loses the capture.
+    """
+    if Image is None:
+        return file_bytes
+    try:
+        with Image.open(BytesIO(file_bytes)) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            width, height = img.size
+            longest = max(width, height)
+            if longest > max_edge:
+                scale = max_edge / longest
+                img = img.resize((max(1, int(width * scale)), max(1, int(height * scale))))
+            output = BytesIO()
+            img.save(output, format="JPEG", quality=quality, optimize=True)
+        compressed = output.getvalue()
+        # Never store something bigger than the original (e.g. tiny PNGs).
+        return compressed if len(compressed) < len(file_bytes) else file_bytes
+    except Exception:  # pragma: no cover - defensive; keep the capture regardless
+        return file_bytes
 
 
 def preprocess_image(file_bytes: bytes) -> tuple[bytes, int | None, int | None, str, list[str]]:

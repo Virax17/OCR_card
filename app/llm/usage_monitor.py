@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 from app.config import (
-    EVENTS_ROOT,
     GEMINI_DAILY_REQUEST_LIMIT,
     GEMINI_DAILY_TOKEN_LIMIT,
     GEMINI_MINUTE_REQUEST_LIMIT,
@@ -12,9 +12,16 @@ from app.config import (
     GOOGLE_VISION_MINUTE_REQUEST_LIMIT,
     GOOGLE_VISION_PRICE_PER_1000,
 )
-from app.storage import mongo_usage
-from app.storage.db import connection, new_id, utc_now
-from app.storage.repositories import db_path_for
+from app.storage import mongo, mongo_usage
+from app.storage.db import new_id, utc_now
+
+LLM_USAGE = "llm_usage"
+
+# Short server-side cache so the /llm-usage poll (fired after every scan) and the
+# pre-call budget check don't each run a fresh aggregate against Atlas. This is
+# server memory, not browser cache.
+_snapshot_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -54,81 +61,77 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _ensure_usage_columns(conn) -> None:
-    columns = {row["name"] for row in conn.execute('PRAGMA table_info("llm_usage")').fetchall()}
-    if "key_label" not in columns:
-        conn.execute('ALTER TABLE "llm_usage" ADD COLUMN "key_label" TEXT')
-    if "unit_count" not in columns:
-        conn.execute('ALTER TABLE "llm_usage" ADD COLUMN "unit_count" INTEGER NOT NULL DEFAULT 0')
-    if "cost_estimate_usd" not in columns:
-        conn.execute('ALTER TABLE "llm_usage" ADD COLUMN "cost_estimate_usd" REAL NOT NULL DEFAULT 0')
+def _usage_collection():
+    db = mongo.get_database()
+    return db[LLM_USAGE] if db is not None else None
 
 
-def _usage_counts_for_db(db_path: Path, provider: str = "gemini") -> tuple[int, int, int, int, float, dict[str, int]]:
-    if not db_path.exists():
-        return 0, 0, 0, 0, 0.0, {}
-    with connection(db_path) as conn:
-        _ensure_usage_columns(conn)
-        daily = conn.execute(
-            """
-            SELECT
-              COALESCE(SUM(request_count), 0) AS requests,
-              COALESCE(SUM(total_tokens), 0) AS tokens,
-              COALESCE(SUM(cost_estimate_usd), 0) AS cost
-            FROM llm_usage
-            WHERE provider = ?
-              AND datetime(created_at) >= datetime('now', '-1 day')
-            """,
-            (provider,),
-        ).fetchone()
-        minute = conn.execute(
-            """
-            SELECT COALESCE(SUM(request_count), 0) AS requests
-            FROM llm_usage
-            WHERE provider = ?
-              AND datetime(created_at) >= datetime('now', '-1 minute')
-            """,
-            (provider,),
-        ).fetchone()
-        monthly = conn.execute(
-            """
-            SELECT COALESCE(SUM(unit_count), 0) AS units
-            FROM llm_usage
-            WHERE provider = ?
-              AND datetime(created_at) >= datetime('now', 'start of month')
-            """,
-            (provider,),
-        ).fetchone()
-        key_rows = conn.execute(
-            """
-            SELECT COALESCE(key_label, 'default') AS key_label, COALESCE(SUM(request_count), 0) AS requests
-            FROM llm_usage
-            WHERE provider = ?
-              AND datetime(created_at) >= datetime('now', '-1 day')
-            GROUP BY COALESCE(key_label, 'default')
-            """,
-            (provider,),
-        ).fetchall()
-    by_key = {row["key_label"]: int(row["requests"]) for row in key_rows}
-    return int(daily["requests"]), int(minute["requests"]), int(daily["tokens"]), int(monthly["units"]), float(daily["cost"]), by_key
+def _aggregate_usage(provider: str, event_id: str | None) -> dict:
+    """Return rolling usage totals for a provider from the Mongo llm_usage collection.
+
+    Cached for a few seconds so repeated polls/pre-call checks stay cheap.
+    """
+    cache_key = f"{provider}:{event_id or '*'}"
+    cached = _snapshot_cache.get(cache_key)
+    if cached is not None and (time.monotonic() - cached[0]) < _CACHE_TTL_SECONDS:
+        return cached[1]
+
+    empty = {"daily_requests": 0, "minute_requests": 0, "daily_tokens": 0,
+             "monthly_units": 0, "estimated_cost_usd": 0.0, "by_key": {}}
+    collection = _usage_collection()
+    if collection is None:
+        return empty
+
+    now = datetime.now(UTC)
+    day_ago = now - timedelta(days=1)
+    minute_ago = now - timedelta(minutes=1)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    base = {"provider": provider}
+    if event_id:
+        base = {**base, "event_id": event_id}
+
+    try:
+        daily = list(collection.aggregate([
+            {"$match": {**base, "created_at": {"$gte": day_ago}}},
+            {"$group": {"_id": None,
+                        "requests": {"$sum": "$request_count"},
+                        "tokens": {"$sum": "$total_tokens"},
+                        "cost": {"$sum": "$cost_estimate_usd"}}},
+        ]))
+        minute = list(collection.aggregate([
+            {"$match": {**base, "created_at": {"$gte": minute_ago}}},
+            {"$group": {"_id": None, "requests": {"$sum": "$request_count"}}},
+        ]))
+        monthly = list(collection.aggregate([
+            {"$match": {**base, "created_at": {"$gte": month_start}}},
+            {"$group": {"_id": None, "units": {"$sum": "$unit_count"}}},
+        ]))
+        by_key_rows = list(collection.aggregate([
+            {"$match": {**base, "created_at": {"$gte": day_ago}}},
+            {"$group": {"_id": {"$ifNull": ["$key_label", "default"]},
+                        "requests": {"$sum": "$request_count"}}},
+        ]))
+    except Exception:  # noqa: BLE001 — never let a metrics read break a scan
+        return cached[1] if cached is not None else empty
+
+    result = {
+        "daily_requests": int(daily[0]["requests"]) if daily else 0,
+        "minute_requests": int(minute[0]["requests"]) if minute else 0,
+        "daily_tokens": int(daily[0]["tokens"]) if daily else 0,
+        "monthly_units": int(monthly[0]["units"]) if monthly else 0,
+        "estimated_cost_usd": float(daily[0]["cost"]) if daily else 0.0,
+        "by_key": {row["_id"]: int(row["requests"]) for row in by_key_rows},
+    }
+    _snapshot_cache[cache_key] = (time.monotonic(), result)
+    return result
 
 
 def usage_snapshot(event_id: str | None = None) -> UsageSnapshot:
-    if event_id:
-        daily_requests, minute_requests, daily_tokens, _, _, _ = _usage_counts_for_db(db_path_for(event_id), "gemini")
-    else:
-        daily_requests = 0
-        minute_requests = 0
-        daily_tokens = 0
-        for db_path in Path(EVENTS_ROOT).glob("*/app.db"):
-            db_daily, db_minute, db_tokens, _, _, _ = _usage_counts_for_db(db_path, "gemini")
-            daily_requests += db_daily
-            minute_requests += db_minute
-            daily_tokens += db_tokens
+    totals = _aggregate_usage("gemini", event_id)
     return UsageSnapshot(
-        daily_requests=daily_requests,
-        minute_requests=minute_requests,
-        daily_tokens=daily_tokens,
+        daily_requests=totals["daily_requests"],
+        minute_requests=totals["minute_requests"],
+        daily_tokens=totals["daily_tokens"],
         daily_request_limit=GEMINI_DAILY_REQUEST_LIMIT,
         minute_request_limit=GEMINI_MINUTE_REQUEST_LIMIT,
         daily_token_limit=GEMINI_DAILY_TOKEN_LIMIT,
@@ -136,47 +139,42 @@ def usage_snapshot(event_id: str | None = None) -> UsageSnapshot:
 
 
 def provider_usage_snapshot(provider: str, event_id: str | None = None) -> ProviderUsageSnapshot:
-    totals = {
-        "daily_requests": 0,
-        "minute_requests": 0,
-        "daily_tokens": 0,
-        "monthly_units": 0,
-        "estimated_cost_usd": 0.0,
-    }
-    by_key: dict[str, int] = {}
-    db_paths = [db_path_for(event_id)] if event_id else list(Path(EVENTS_ROOT).glob("*/app.db"))
-    for db_path in db_paths:
-        db_daily, db_minute, db_tokens, db_units, db_cost, db_by_key = _usage_counts_for_db(db_path, provider)
-        totals["daily_requests"] += db_daily
-        totals["minute_requests"] += db_minute
-        totals["daily_tokens"] += db_tokens
-        totals["monthly_units"] += db_units
-        totals["estimated_cost_usd"] += db_cost
-        for key, count in db_by_key.items():
-            by_key[key] = by_key.get(key, 0) + count
+    totals = _aggregate_usage(provider, event_id)
     if provider == "gemini":
         return ProviderUsageSnapshot(
             provider=provider,
+            daily_requests=totals["daily_requests"],
+            minute_requests=totals["minute_requests"],
+            daily_tokens=totals["daily_tokens"],
+            monthly_units=totals["monthly_units"],
+            estimated_cost_usd=totals["estimated_cost_usd"],
             daily_request_limit=GEMINI_DAILY_REQUEST_LIMIT,
             minute_request_limit=GEMINI_MINUTE_REQUEST_LIMIT,
             daily_token_limit=GEMINI_DAILY_TOKEN_LIMIT,
-            by_key=by_key,
-            **totals,
+            by_key=totals["by_key"],
         )
     if provider == "google_vision":
         monthly_billable = max(0, totals["monthly_units"] - GOOGLE_VISION_FREE_UNITS_MONTHLY)
         return ProviderUsageSnapshot(
             provider=provider,
-            minute_request_limit=GOOGLE_VISION_MINUTE_REQUEST_LIMIT,
-            free_units_monthly=GOOGLE_VISION_FREE_UNITS_MONTHLY,
-            estimated_cost_usd=round((monthly_billable / 1000) * GOOGLE_VISION_PRICE_PER_1000, 4),
-            by_key=by_key,
             daily_requests=totals["daily_requests"],
             minute_requests=totals["minute_requests"],
             daily_tokens=0,
             monthly_units=totals["monthly_units"],
+            minute_request_limit=GOOGLE_VISION_MINUTE_REQUEST_LIMIT,
+            free_units_monthly=GOOGLE_VISION_FREE_UNITS_MONTHLY,
+            estimated_cost_usd=round((monthly_billable / 1000) * GOOGLE_VISION_PRICE_PER_1000, 4),
+            by_key=totals["by_key"],
         )
-    return ProviderUsageSnapshot(provider=provider, by_key=by_key, **totals)
+    return ProviderUsageSnapshot(
+        provider=provider,
+        daily_requests=totals["daily_requests"],
+        minute_requests=totals["minute_requests"],
+        daily_tokens=totals["daily_tokens"],
+        monthly_units=totals["monthly_units"],
+        estimated_cost_usd=totals["estimated_cost_usd"],
+        by_key=totals["by_key"],
+    )
 
 
 def record_usage(
@@ -195,35 +193,34 @@ def record_usage(
     error_message: str | None = None,
 ) -> None:
     total_tokens = prompt_tokens + completion_tokens
-    with connection(db_path_for(event_id)) as conn:
-        _ensure_usage_columns(conn)
-        conn.execute(
-            """
-            INSERT INTO llm_usage (
-              usage_id, event_id, provider, model, purpose, prompt_tokens, completion_tokens,
-              total_tokens, request_count, status, error_message, created_at, key_label, unit_count, cost_estimate_usd
+    collection = _usage_collection()
+    if collection is not None:
+        try:
+            collection.insert_one(
+                {
+                    "_id": new_id("usage"),
+                    "event_id": event_id,
+                    "provider": provider,
+                    "model": model,
+                    "purpose": purpose,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "request_count": request_count,
+                    "unit_count": unit_count,
+                    "cost_estimate_usd": cost_estimate_usd,
+                    "status": status,
+                    "error_message": error_message,
+                    "key_label": key_label,
+                    # Real datetime so the rolling-window aggregations can range-query it.
+                    "created_at": datetime.now(UTC),
+                    "created_at_iso": utc_now(),
+                }
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                new_id("usage"),
-                event_id,
-                provider,
-                model,
-                purpose,
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                request_count,
-                status,
-                error_message,
-                utc_now(),
-                key_label,
-                unit_count,
-                cost_estimate_usd,
-            ),
-        )
-    # Keep the 24/7 MongoDB counters in sync with every real API attempt.
+        except Exception:  # noqa: BLE001 — usage logging must never break a scan
+            pass
+
+    # Keep the 24/7 MongoDB budget counters in sync with every real API attempt.
     # Local-limit/config skips do not touch external APIs, so they should not
     # consume the persistent budget.
     if status not in {"blocked_local_limit", "skipped_not_configured"}:

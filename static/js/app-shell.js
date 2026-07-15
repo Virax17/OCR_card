@@ -14,7 +14,7 @@ export const state = {
   route: "#/home",
   online: navigator.onLine,
   pendingQueue: [],
-  filters: { search: "", duplicatesOnly: false, category: null },
+  filters: { search: "", needsReviewOnly: false, category: null },
   loading: true,
 };
 
@@ -57,9 +57,7 @@ function wireNav() {
       window.location.hash = el.dataset.route;
     });
   });
-  $("#navScanFab").addEventListener("click", () => openScanScreen());
   $("#navLinkScan")?.addEventListener("click", () => openScanScreen());
-  $("#navEvents").addEventListener("click", () => openEventSheet());
   $("#appBarEvent").addEventListener("click", () => openEventSheet());
   $("#netStatus").addEventListener("click", () => {
     window.location.hash = "#/more";
@@ -148,9 +146,6 @@ export async function refreshAll() {
 function handleConnectivityChange() {
   state.online = navigator.onLine;
   updateNetStatusPill();
-  if (state.online) {
-    window.dispatchEvent(new CustomEvent("attemptQueueFlush"));
-  }
 }
 
 function handleQueueChanged(event) {

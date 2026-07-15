@@ -298,27 +298,6 @@ dialog.sheet::backdrop {
   flex-shrink: 0;
 }
 
-.confidence-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-
-.confidence-dot.high { background: var(--success); }
-.confidence-dot.medium { background: var(--warn); }
-.confidence-dot.low { background: var(--danger); }
-
-.dup-badge {
-  border-radius: var(--radius-full);
-  padding: 2px 8px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .03em;
-}
-
 /* Skeleton */
 .contact-card--skeleton {
   cursor: default;
@@ -479,6 +458,148 @@ dialog.sheet::backdrop {
 .status-pill.ok { background: var(--success-bg); color: var(--success); }
 .status-pill.warning { background: var(--warn-bg); color: #92400e; }
 .status-pill.error { background: var(--danger-bg); color: var(--danger); }
+
+/* Status chip — one shared vocabulary for upload-queue state (waiting/
+   uploading/done/failed/cancelled) AND record review state (reviewed/
+   needs-review/duplicate), used on Home, Records, capture results, and the
+   review queue so status is always communicated the same way. */
+.status-chip {
+  border-radius: var(--radius-full);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-chip.waiting, .status-chip.pending { background: #eef0f4; color: var(--text-dim); }
+.status-chip.uploading { background: var(--warn-bg); color: var(--warn); }
+.status-chip.failed { background: var(--danger-bg); color: var(--danger); }
+.status-chip.cancelled { background: #eef0f4; color: var(--text-dim); }
+.status-chip.done, .status-chip.reviewed { background: var(--success-bg); color: var(--success); }
+.status-chip.needs-review { background: var(--warn-bg); color: #92400e; }
+.status-chip.duplicate { background: var(--danger-bg); color: var(--danger); }
+
+/* Attention card — proactive callout used by Home's "Needs review" card and
+   the Records "Review all" banner. Not a passive warning: always tappable. */
+.attention-card {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: var(--warn-bg);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  touch-action: manipulation;
+  text-align: left;
+  font: inherit;
+}
+
+.attention-card:active {
+  transform: scale(.99);
+}
+
+.attention-card-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: var(--warn);
+}
+
+.attention-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.attention-card-title {
+  font-weight: 600;
+  font-size: var(--font-sm);
+  color: #92400e;
+}
+
+.attention-card-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #92400e;
+  opacity: .85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-card-chevron {
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+/* Processing pill — compact, auto-hiding live indicator. Unlike a permanent
+   panel, this only exists in the DOM's visible flow while work is in flight. */
+.processing-pill {
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--radius-full);
+  box-shadow: 0 1px 2px rgba(20, 33, 61, .05);
+  cursor: pointer;
+  touch-action: manipulation;
+  text-align: left;
+  font: inherit;
+}
+
+.processing-pill-stop {
+  min-height: 34px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.processing-pill.visible {
+  display: flex;
+}
+
+.processing-pill-spinner {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--teal);
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing-pill-spinner { animation: none; }
+}
+
+.processing-pill-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processing-pill-text .dim {
+  color: var(--text-dim);
+  font-weight: 500;
+}
 
 /* Toast */
 #toast {

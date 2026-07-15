@@ -1,29 +1,35 @@
 import * as api from "./api.js";
 import { escapeHtml, isDuplicate } from "./utils.js";
-import { getQueueSnapshot, retryQueueItem, removeQueueItem } from "./queue.js";
+import { getQueueSnapshot, stopProcessing } from "./queue.js";
 import { usagePanelHtml } from "./usage-panel.js";
 
 const $ = (selector) => document.querySelector(selector);
 
-// How long a finished card keeps showing "✓ Done" in the processing panel
-// before it drops out of the list.
+// How long a finished/failed batch keeps showing in the pill before it
+// clears back to hidden (the queue itself deletes a succeeded item instantly).
 const DONE_DISPLAY_MS = 4500;
 
-// Recently-completed queue items, kept around just long enough for the user
-// to see them finish (the queue itself deletes an item the instant it succeeds).
-let recentlyDone = []; // { id, thumbUrl }
-// The queue deletes an item's row (and its thumbUrl) from the snapshot BEFORE
-// dispatching queueItemProcessed, so by the time the success handler runs the
-// thumbnail is already gone. This map is rebuilt on every render (while items
-// are still "uploading" and thus present) so the handler can still look it up.
-let lastSnapshotById = new Map();
+// Recently-completed queue items, kept around just long enough for the pill
+// to say "✓ N processed" (the queue itself deletes an item the instant it
+// succeeds, so without this the pill would jump straight to hidden).
+let recentlyDone = []; // { id }
+let clearDoneTimer = null;
 
 export function renderDashboard() {
   // Static wiring handled in wire functions; kept for symmetry with other screens.
 }
 
 export function wireDashboard() {
-  $("#dashScanBtn").addEventListener("click", async () => {
+  // Hide scan button on mobile — Scan FAB in bottom nav is sufficient
+  const scanBtn = $("#dashScanBtn");
+  const updateScanButtonVisibility = () => {
+    const isMobile = window.matchMedia("(max-width: 1023px)").matches;
+    scanBtn.style.display = isMobile ? "none" : "flex";
+  };
+  updateScanButtonVisibility();
+  window.addEventListener("resize", updateScanButtonVisibility);
+
+  scanBtn.addEventListener("click", async () => {
     const { openScanScreen } = await import("./scan.js");
     openScanScreen();
   });
@@ -35,25 +41,24 @@ export function wireDashboard() {
     await importGalleryFiles(files);
     $("#dashUploadInput").value = "";
   });
-  $("#dashExportBtn").addEventListener("click", async () => {
-    const { state, showToast } = await import("./app-shell.js");
-    if (!state.eventId) return showToast("Select an event first.", "error");
-    if (!state.online) return showToast("Export requires a connection.", "error");
-    window.open(api.downloadUrl(state.eventId), "_blank");
+  $("#processingPillStopBtn")?.addEventListener("click", async () => {
+    stopProcessing();
+    const { showToast } = await import("./app-shell.js");
+    showToast("Terminated queue processing.", "info");
   });
-  $("#queueBannerBtn").addEventListener("click", async () => {
-    window.dispatchEvent(new CustomEvent("attemptQueueFlush"));
+  $("#queueBtn")?.addEventListener("click", async () => {
+    const { openQueueSheet } = await import("./process-sheet.js");
+    openQueueSheet();
   });
-
-  // Registered once here (not inside render) so successful items get a brief
-  // "done" entry no matter which screen is active when they finish.
+  // Registered once here (not inside render) so a completed card updates the
+  // pill no matter which screen is active when it finishes.
   window.addEventListener("queueItemProcessed", handleQueueItemProcessed);
 }
 
 export async function refreshDashboard(state) {
   renderHero(state);
-  renderQueueBanner(state);
-  renderProcessingPanel(state);
+  renderProcessingPill(state);
+  renderQueueButton(state);
   renderUsage(state);
 }
 
@@ -61,14 +66,14 @@ async function handleQueueItemProcessed(event) {
   const { id, success } = event.detail || {};
   if (!success || id == null) return;
   if (recentlyDone.some((entry) => entry.id === id)) return; // already tracked
-  const lastKnown = lastSnapshotById.get(id);
-  recentlyDone.push({ id, thumbUrl: lastKnown?.thumbUrl || "" });
-  window.setTimeout(() => {
-    recentlyDone = recentlyDone.filter((entry) => entry.id !== id);
-    import("./app-shell.js").then(({ state }) => renderProcessingPanel(state));
+  recentlyDone.push({ id });
+  window.clearTimeout(clearDoneTimer);
+  clearDoneTimer = window.setTimeout(() => {
+    recentlyDone = [];
+    import("./app-shell.js").then(({ state }) => renderProcessingPill(state));
   }, DONE_DISPLAY_MS);
   const { state } = await import("./app-shell.js");
-  renderProcessingPanel(state);
+  renderProcessingPill(state);
 }
 
 function renderHero(state) {
@@ -121,84 +126,55 @@ function renderHero(state) {
   });
 }
 
-function renderQueueBanner(state) {
-  const banner = $("#queueBanner");
-  const queue = getQueueSnapshot();
-  if (!queue.length) {
-    banner.hidden = true;
-    return;
-  }
-  banner.hidden = false;
-  $("#queueBannerText").textContent = `${queue.length} scan${queue.length === 1 ? "" : "s"} waiting for network — will process automatically`;
-}
-
-function renderProcessingPanel(state) {
-  const panel = $("#processingPanel");
-  if (!panel) return;
-  if (state.loading) {
-    panel.innerHTML = Array.from({ length: 2 }, () => `
-      <div class="queue-row">
-        <div class="skeleton-block" style="width:44px;height:44px;border-radius:8px"></div>
-        <div class="queue-row-body">
-          <div class="skeleton-line" style="width:50%"></div>
-          <div class="skeleton-line" style="width:70%"></div>
-        </div>
-      </div>
-    `).join("");
-    return;
-  }
+// Compact, auto-hiding live indicator — replaces the old always-visible
+// "Processing" panel. Only takes up space on Home while something is
+// actually happening; per-photo detail still lives in the process sheet.
+function renderProcessingPill(state) {
+  const pill = $("#processingPill");
+  const text = $("#processingPillText");
+  if (!pill || !text) return;
 
   const queue = getQueueSnapshot();
-  // Snapshot items are still present while "uploading"; capture their thumb/time
-  // here so a completed item's row can still be rendered after it's deleted.
-  lastSnapshotById = new Map(queue.map((item) => [item.id, { thumbUrl: item.thumbUrl, capturedAt: item.capturedAt }]));
+  const inFlight = queue.filter((it) => it.status === "pending" || it.status === "uploading").length;
+  const failed = queue.filter((it) => it.status === "failed").length;
+  const cancelled = queue.filter((it) => it.status === "cancelled").length;
+  const stopBtn = $("#processingPillStopBtn");
 
-  const rows = [
-    ...queue.map((item) => ({ kind: item.status, item })),
-    ...recentlyDone.map((entry) => ({
-      kind: "done",
-      item: { id: entry.id, thumbUrl: entry.thumbUrl, capturedAt: lastSnapshotById.get(entry.id)?.capturedAt },
-    })),
-  ];
-  // Active work first, then reassuring "done" feedback, then failures that
-  // need the user's attention (kept visible until retried or dismissed).
-  const order = { uploading: 0, pending: 1, done: 2, failed: 3 };
-  rows.sort((a, b) => order[a.kind] - order[b.kind]);
-
-  if (!rows.length) {
-    panel.innerHTML = `<div class="empty-card"><strong>All caught up</strong>No cards processing right now.</div>`;
-    return;
+  if (inFlight > 0) {
+    text.innerHTML = `Processing ${inFlight} card${inFlight === 1 ? "" : "s"}&hellip;`;
+    pill.classList.add("visible");
+    if (stopBtn) stopBtn.hidden = false;
+  } else if (failed > 0 || cancelled > 0) {
+    const parts = [];
+    if (failed) parts.push(`${failed} failed`);
+    if (cancelled) parts.push(`${cancelled} stopped`);
+    text.innerHTML = `${escapeHtml(parts.join(", "))} <span class="dim">&middot; retry from Records</span>`;
+    pill.classList.add("visible");
+    if (stopBtn) stopBtn.hidden = true;
+  } else if (recentlyDone.length > 0) {
+    text.textContent = `✓ ${recentlyDone.length} card${recentlyDone.length === 1 ? "" : "s"} processed`;
+    pill.classList.add("visible");
+    if (stopBtn) stopBtn.hidden = true;
+  } else {
+    pill.classList.remove("visible");
+    if (stopBtn) stopBtn.hidden = true;
   }
-
-  panel.innerHTML = rows.map((row) => processingRowHtml(row)).join("");
-  panel.querySelectorAll("[data-retry]").forEach((btn) => {
-    btn.addEventListener("click", () => retryQueueItem(Number(btn.dataset.retry)));
-  });
-  panel.querySelectorAll("[data-dismiss]").forEach((btn) => {
-    btn.addEventListener("click", () => removeQueueItem(Number(btn.dataset.dismiss)));
-  });
 }
 
-function processingRowHtml({ kind, item }) {
-  const labels = { pending: "Waiting", uploading: "Processing…", done: "✓ Done", failed: "⚠ Failed" };
-  const chipClass = kind === "pending" ? "waiting" : kind;
-  const thumb = item.thumbUrl
-    ? `<img src="${item.thumbUrl}" alt="">`
-    : `<div style="width:44px;height:44px;border-radius:8px;background:#eef0f4"></div>`;
-  const timeLabel = item.capturedAt ? new Date(item.capturedAt).toLocaleTimeString() : "";
-  return `
-    <div class="queue-row">
-      ${thumb}
-      <div class="queue-row-body">
-        <div style="font-weight:700;font-size:var(--font-sm)">${escapeHtml(timeLabel || "Card")}</div>
-      </div>
-      <span class="status-chip ${chipClass}">${labels[kind]}</span>
-      ${kind === "failed" ? `
-        <button class="btn outline" data-retry="${item.id}" style="min-height:36px;padding:6px 10px;">Retry</button>
-        <button class="btn ghost icon-btn" data-dismiss="${item.id}" aria-label="Dismiss" style="min-height:36px;">✕</button>
-      ` : ""}
-    </div>
-  `;
+function renderQueueButton(state) {
+  const btn = $("#queueBtn");
+  const text = $("#queueBtnText");
+  if (!btn || !text) return;
+
+  const queue = getQueueSnapshot();
+  const total = queue.length;
+
+  if (total > 0) {
+    text.textContent = `Queue (${total})`;
+    btn.hidden = false;
+  } else {
+    btn.hidden = true;
+  }
 }
 
 function renderUsage(state) {

@@ -1,55 +1,148 @@
+"""Data-access layer, backed entirely by MongoDB.
+
+Every store that used to be a per-event SQLite file now lives in one shared
+MongoDB database (see ``app/storage/mongo.py``). Function signatures are kept
+identical to the old SQLite implementation so callers (``app/main.py``) are
+unchanged; only the storage underneath moved. Documents map directly onto the
+Pydantic models in ``app/models.py`` — nested lists (OCR blocks, card sides)
+become embedded arrays instead of separate tables.
+"""
+
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
-from app.config import EVENTS_ROOT
 from app.models import BusinessCardRecord, EventOut, FieldCandidate, OCRSideResult
-from app.storage.db import connection, event_db_path, initialize_event_database, new_id, utc_now
+from app.storage import mongo
+from app.storage.db import new_id, utc_now, validate_event_id
+
+# Collection names (one Mongo database, these collections replace the SQLite tables).
+EVENTS = "events"
+CARDS = "cards"
+OCR_RESULTS = "ocr_results"
+FIELD_CANDIDATES = "field_candidates"
+CARD_RECORDS = "card_records"
+DUPLICATE_LINKS = "duplicate_links"
+AUDITS = "audits"
+
+_RECORD_FIELDS = getattr(BusinessCardRecord, "model_fields", None) or getattr(BusinessCardRecord, "__fields__", {})
 
 
-def db_path_for(event_id: str) -> Path:
-    return event_db_path(EVENTS_ROOT, event_id)
+def _db():
+    database = mongo.get_database()
+    if database is None:
+        raise RuntimeError(
+            "MongoDB is unavailable — the app requires a reachable MONGODB_URI to store and read data."
+        )
+    return database
 
 
-def ensure_event(event_id: str, name: str, date: str, location: str | None = None) -> Path:
-    return initialize_event_database(EVENTS_ROOT, event_id=event_id, name=name, date=date, location=location)
+def ensure_indexes() -> None:
+    """Create the indexes that mirror the old SQLite ones. Safe to call repeatedly."""
+    db = mongo.get_database()
+    if db is None:
+        return
+    db[CARDS].create_index("event_id")
+    db[CARD_RECORDS].create_index("event_id")
+    db[CARD_RECORDS].create_index("email")
+    db[CARD_RECORDS].create_index("phone_primary")
+    db[CARD_RECORDS].create_index("company")
+    db[CARD_RECORDS].create_index("card_id", unique=True)
+    db[DUPLICATE_LINKS].create_index("event_id")
+    db[OCR_RESULTS].create_index("card_id")
+    db[FIELD_CANDIDATES].create_index("card_id")
+
+
+# --- Events -----------------------------------------------------------------
+
+def ensure_event(event_id: str, name: str, date: str, location: str | None = None) -> str:
+    validate_event_id(event_id)
+    now = utc_now()
+    _db()[EVENTS].update_one(
+        {"_id": event_id},
+        {
+            "$set": {
+                "event_id": event_id,
+                "name": name,
+                "date": date,
+                "location": location,
+                "updated_at": now,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
+    return event_id
 
 
 def list_events() -> list[EventOut]:
-    root = Path(EVENTS_ROOT)
-    if not root.exists():
+    db = mongo.get_database()
+    if db is None:
         return []
-    events: list[EventOut] = []
-    for db_path in sorted(root.glob("*/app.db")):
-        with connection(db_path) as conn:
-            rows = conn.execute("SELECT event_id, name, date, location, booth, notes FROM events ORDER BY created_at").fetchall()
-            for row in rows:
-                events.append(EventOut(**dict(row)))
-    return events
+    docs = db[EVENTS].find(
+        {}, {"event_id": 1, "name": 1, "date": 1, "location": 1, "booth": 1, "notes": 1}
+    ).sort("created_at", 1)
+    return [
+        EventOut(
+            event_id=doc["event_id"],
+            name=doc.get("name", ""),
+            date=doc.get("date", ""),
+            location=doc.get("location"),
+            booth=doc.get("booth"),
+            notes=doc.get("notes"),
+        )
+        for doc in docs
+    ]
+
+
+def delete_event(event_id: str) -> dict[str, int]:
+    """Delete the event itself and every document that belongs to it.
+
+    Cascades across every collection that carries ``event_id`` (cards, card
+    records, OCR results, field candidates, duplicate links, audits) and the
+    event document itself. Images are NOT removed here — the caller (main.py)
+    handles GridFS deletion via ``clear_event_images`` since that lives outside
+    Mongo's collection API.
+    """
+    counts = reset_event_data(event_id)
+    result = _db()[EVENTS].delete_one({"_id": event_id})
+    counts["event"] = result.deleted_count
+    return counts
 
 
 def get_event(event_id: str) -> EventOut | None:
-    path = db_path_for(event_id)
-    if not path.exists():
+    doc = _db()[EVENTS].find_one({"_id": event_id})
+    if not doc:
         return None
-    with connection(path) as conn:
-        row = conn.execute("SELECT event_id, name, date, location, booth, notes FROM events WHERE event_id = ?", (event_id,)).fetchone()
-    return EventOut(**dict(row)) if row else None
+    return EventOut(
+        event_id=doc["event_id"],
+        name=doc.get("name", ""),
+        date=doc.get("date", ""),
+        location=doc.get("location"),
+        booth=doc.get("booth"),
+        notes=doc.get("notes"),
+    )
 
+
+# --- Cards ------------------------------------------------------------------
 
 def create_card(event_id: str, processing_mode: str = "balanced") -> str:
     card_id = new_id("card")
     now = utc_now()
-    with connection(db_path_for(event_id)) as conn:
-        conn.execute(
-            """
-            INSERT INTO cards (card_id, event_id, status, processing_mode, created_at, updated_at)
-            VALUES (?, ?, 'processing', ?, ?, ?)
-            """,
-            (card_id, event_id, processing_mode, now, now),
-        )
+    _db()[CARDS].insert_one(
+        {
+            "_id": card_id,
+            "card_id": card_id,
+            "event_id": event_id,
+            "status": "processing",
+            "processing_mode": processing_mode,
+            "confidence_score": None,
+            "duplicate_flag": "No",
+            "sides": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
     return card_id
 
 
@@ -64,294 +157,210 @@ def insert_card_side(
     height: int | None = None,
     quality_score: str | None = None,
     quality_warnings: list[str] | None = None,
+    file_id: Any = None,
 ) -> None:
-    with connection(db_path_for(event_id)) as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO card_sides
-              (side_id, card_id, side, filename, content_type, width, height, quality_score, quality_warnings, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                new_id("side"),
-                card_id,
-                side,
-                filename,
-                content_type,
-                width,
-                height,
-                quality_score,
-                json.dumps(quality_warnings or []),
-                utc_now(),
-            ),
-        )
+    # Remove any existing entry for this side, then push the fresh one (mirrors
+    # the old INSERT OR REPLACE on the UNIQUE(card_id, side) constraint).
+    _db()[CARDS].update_one({"_id": card_id}, {"$pull": {"sides": {"side": side}}})
+    _db()[CARDS].update_one(
+        {"_id": card_id},
+        {
+            "$push": {
+                "sides": {
+                    "side": side,
+                    "filename": filename,
+                    "content_type": content_type,
+                    "width": width,
+                    "height": height,
+                    "quality_score": quality_score,
+                    "quality_warnings": quality_warnings or [],
+                    "file_id": file_id,
+                    "created_at": utc_now(),
+                }
+            },
+            "$set": {"updated_at": utc_now()},
+        },
+    )
 
 
 def insert_ocr_result(event_id: str, card_id: str, result: OCRSideResult) -> None:
-    ocr_result_id = new_id("ocr")
-    with connection(db_path_for(event_id)) as conn:
-        conn.execute(
-            """
-            INSERT INTO ocr_results
-              (ocr_result_id, card_id, side, engine, engine_version, variant, runtime_ms, status, error_message, raw_text, average_confidence, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                ocr_result_id,
-                card_id,
-                result.side,
-                result.engine,
-                result.engine_version,
-                result.variant,
-                result.runtime_ms,
-                result.status,
-                result.error_message,
-                result.raw_text,
-                result.average_confidence,
-                utc_now(),
-            ),
-        )
-        for block in result.blocks:
-            conn.execute(
-                """
-                INSERT INTO ocr_blocks (block_id, ocr_result_id, line_index, text, confidence, engine, variant, normalized_text, bbox_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_id("block"),
-                    ocr_result_id,
-                    block.line_index,
-                    block.text,
-                    block.confidence,
-                    block.engine or result.engine,
-                    block.variant or result.variant,
-                    block.normalized_text,
-                    json.dumps(block.bbox),
-                ),
-            )
+    blocks = [
+        {
+            "line_index": block.line_index,
+            "text": block.text,
+            "confidence": block.confidence,
+            "engine": block.engine or result.engine,
+            "variant": block.variant or result.variant,
+            "normalized_text": block.normalized_text,
+            "bbox": block.bbox,
+            "size_tag": block.size_tag,
+            "position_band": block.position_band,
+        }
+        for block in result.blocks
+    ]
+    _db()[OCR_RESULTS].insert_one(
+        {
+            "_id": new_id("ocr"),
+            "card_id": card_id,
+            "event_id": event_id,
+            "side": result.side,
+            "engine": result.engine,
+            "engine_version": result.engine_version,
+            "variant": result.variant,
+            "runtime_ms": result.runtime_ms,
+            "status": result.status,
+            "error_message": result.error_message,
+            "raw_text": result.raw_text,
+            "average_confidence": result.average_confidence,
+            "blocks": blocks,
+            "created_at": utc_now(),
+        }
+    )
 
 
 def insert_field_candidates(event_id: str, card_id: str, candidates: list[FieldCandidate]) -> None:
-    with connection(db_path_for(event_id)) as conn:
-        for candidate in candidates:
-            conn.execute(
-                """
-                INSERT INTO field_candidates
-                  (candidate_id, card_id, field_name, value, confidence, source, evidence, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    new_id("cand"),
-                    card_id,
-                    candidate.field,
-                    candidate.value,
-                    candidate.confidence,
-                    candidate.source,
-                    candidate.evidence,
-                    utc_now(),
-                ),
-            )
+    if not candidates:
+        return
+    now = utc_now()
+    _db()[FIELD_CANDIDATES].insert_many(
+        [
+            {
+                "_id": new_id("cand"),
+                "card_id": card_id,
+                "event_id": event_id,
+                "field_name": candidate.field,
+                "value": candidate.value,
+                "confidence": candidate.confidence,
+                "source": candidate.source,
+                "evidence": candidate.evidence,
+                "created_at": now,
+            }
+            for candidate in candidates
+        ]
+    )
+
+
+def save_audit(event_id: str, card_id: str, kind: str, content: str) -> None:
+    """Store an OCR/LLM debug transcript in Mongo instead of on disk."""
+    _db()[AUDITS].update_one(
+        {"card_id": card_id, "kind": kind},
+        {
+            "$set": {
+                "card_id": card_id,
+                "event_id": event_id,
+                "kind": kind,
+                "content": content,
+                "created_at": utc_now(),
+            }
+        },
+        upsert=True,
+    )
+
+
+# --- Card records -----------------------------------------------------------
+
+def _record_to_doc(record: BusinessCardRecord, now: str) -> dict[str, Any]:
+    data = record.model_dump() if hasattr(record, "model_dump") else record.dict()
+    # date/time/event_name are derived on read, not stored on the document.
+    for key in ("date", "time", "event_name"):
+        data.pop(key, None)
+    data["updated_at"] = now
+    return data
 
 
 def upsert_card_record(record: BusinessCardRecord) -> None:
     now = utc_now()
-    with connection(db_path_for(record.event_id)) as conn:
-        conn.execute(
-            """
-            INSERT INTO card_records (
-                record_id, card_id, event_id, name, designation, company, business, phone_primary, phone_number,
-                mobile_number, phone_extra, fax_number, country_code, email, website, address, city, state, country,
-                zip_code, category, social_media, notes, email1, email2, contact1, contact2, contact3, confidence_score,
-                low_confidence_fields, duplicate_flag, front_image_filename, back_image_filename,
-                reviewed_by_user, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(card_id) DO UPDATE SET
-                name = excluded.name,
-                designation = excluded.designation,
-                company = excluded.company,
-                business = excluded.business,
-                phone_primary = excluded.phone_primary,
-                phone_number = excluded.phone_number,
-                mobile_number = excluded.mobile_number,
-                phone_extra = excluded.phone_extra,
-                fax_number = excluded.fax_number,
-                country_code = excluded.country_code,
-                email = excluded.email,
-                website = excluded.website,
-                address = excluded.address,
-                city = excluded.city,
-                state = excluded.state,
-                country = excluded.country,
-                zip_code = excluded.zip_code,
-                category = excluded.category,
-                social_media = excluded.social_media,
-                notes = excluded.notes,
-                email1 = excluded.email1,
-                email2 = excluded.email2,
-                contact1 = excluded.contact1,
-                contact2 = excluded.contact2,
-                contact3 = excluded.contact3,
-                confidence_score = excluded.confidence_score,
-                low_confidence_fields = excluded.low_confidence_fields,
-                duplicate_flag = excluded.duplicate_flag,
-                front_image_filename = excluded.front_image_filename,
-                back_image_filename = excluded.back_image_filename,
-                reviewed_by_user = excluded.reviewed_by_user,
-                updated_at = excluded.updated_at
-            """,
-            (
-                record.record_id,
-                record.card_id,
-                record.event_id,
-                record.name,
-                record.designation,
-                record.company,
-                record.business,
-                record.phone_primary,
-                record.phone_number,
-                record.mobile_number,
-                record.phone_extra,
-                record.fax_number,
-                record.country_code,
-                record.email,
-                record.website,
-                record.address,
-                record.city,
-                record.state,
-                record.country,
-                record.zip_code,
-                record.category,
-                record.social_media,
-                record.notes,
-                record.email1,
-                record.email2,
-                record.contact1,
-                record.contact2,
-                record.contact3,
-                record.confidence_score,
-                ", ".join(record.low_confidence_fields),
-                record.duplicate_flag,
-                record.front_image_filename,
-                record.back_image_filename,
-                1 if record.reviewed_by_user else 0,
-                now,
-                now,
-            ),
-        )
-        conn.execute(
-            "UPDATE cards SET status = ?, confidence_score = ?, duplicate_flag = ?, updated_at = ? WHERE card_id = ?",
-            (
-                "needs_review" if record.confidence_score == "Low" else "processed",
-                record.confidence_score,
-                record.duplicate_flag,
-                now,
-                record.card_id,
-            ),
-        )
+    doc = _record_to_doc(record, now)
+    _db()[CARD_RECORDS].update_one(
+        {"card_id": record.card_id},
+        {"$set": doc, "$setOnInsert": {"_id": record.record_id, "created_at": now}},
+        upsert=True,
+    )
+    _db()[CARDS].update_one(
+        {"_id": record.card_id},
+        {
+            "$set": {
+                "status": "needs_review" if record.confidence_score == "Low" else "processed",
+                "confidence_score": record.confidence_score,
+                "duplicate_flag": record.duplicate_flag,
+                "updated_at": now,
+            }
+        },
+    )
 
 
-def row_to_record(row: Any) -> BusinessCardRecord:
-    data = dict(row)
-    data["low_confidence_fields"] = [part.strip() for part in (data.get("low_confidence_fields") or "").split(",") if part.strip()]
+def _doc_to_record(doc: dict[str, Any], event_name: str) -> BusinessCardRecord:
+    created_at = doc.get("created_at", "") or ""
+    data = dict(doc)
+    data["date"] = created_at[:10]
+    data["time"] = created_at[11:19]
+    data["event_name"] = event_name
     data["reviewed_by_user"] = bool(data.get("reviewed_by_user"))
-    data["date"] = data.get("created_at", "")[:10]
-    data["time"] = data.get("created_at", "")[11:19]
-    data["event_name"] = data.get("event_name") or ""
-    fields = getattr(BusinessCardRecord, "model_fields", None) or getattr(BusinessCardRecord, "__fields__", {})
-    return BusinessCardRecord(**{k: v for k, v in data.items() if k in fields})
+    if not isinstance(data.get("low_confidence_fields"), list):
+        data["low_confidence_fields"] = []
+    return BusinessCardRecord(**{k: v for k, v in data.items() if k in _RECORD_FIELDS})
 
 
 def list_records(event_id: str) -> list[BusinessCardRecord]:
-    with connection(db_path_for(event_id)) as conn:
-        rows = conn.execute(
-            """
-            SELECT cr.*, e.name AS event_name
-            FROM card_records cr
-            JOIN events e ON e.event_id = cr.event_id
-            WHERE cr.event_id = ?
-            ORDER BY cr.created_at DESC
-            """,
-            (event_id,),
-        ).fetchall()
-    return [row_to_record(row) for row in rows]
+    db = _db()
+    event = db[EVENTS].find_one({"_id": event_id}, {"name": 1})
+    event_name = event.get("name", "") if event else ""
+    docs = db[CARD_RECORDS].find({"event_id": event_id}).sort("created_at", -1)
+    return [_doc_to_record(doc, event_name) for doc in docs]
+
+
+def _get_one_record(event_id: str, card_id: str) -> BusinessCardRecord:
+    db = _db()
+    doc = db[CARD_RECORDS].find_one({"card_id": card_id, "event_id": event_id})
+    if not doc:
+        raise KeyError(card_id)
+    event = db[EVENTS].find_one({"_id": event_id}, {"name": 1})
+    return _doc_to_record(doc, event.get("name", "") if event else "")
 
 
 def update_record(event_id: str, card_id: str, values: dict[str, Any]) -> BusinessCardRecord:
     allowed = {
-        "name",
-        "designation",
-        "company",
-        "business",
-        "phone_primary",
-        "phone_number",
-        "mobile_number",
-        "phone_extra",
-        "fax_number",
-        "country_code",
-        "email",
-        "website",
-        "address",
-        "city",
-        "state",
-        "country",
-        "zip_code",
-        "category",
-        "social_media",
-        "notes",
-        "email1",
-        "email2",
-        "contact1",
-        "contact2",
-        "contact3",
+        "name", "designation", "company", "business", "phone_primary", "phone_number",
+        "mobile_number", "phone_extra", "fax_number", "country_code", "email", "website",
+        "address", "city", "state", "country", "zip_code", "category", "social_media",
+        "notes", "email1", "email2", "contact1", "contact2", "contact3",
     }
     updates = {key: value for key, value in values.items() if key in allowed}
     if not updates:
-        records = [record for record in list_records(event_id) if record.card_id == card_id]
-        if not records:
-            raise KeyError(card_id)
-        return records[0]
-    assignments = ", ".join(f"{key} = ?" for key in updates)
-    params = list(updates.values()) + [utc_now(), card_id]
-    with connection(db_path_for(event_id)) as conn:
-        conn.execute(
-            f"UPDATE card_records SET {assignments}, reviewed_by_user = 1, updated_at = ? WHERE card_id = ?",
-            params,
-        )
-        conn.execute("UPDATE cards SET status = 'reviewed', updated_at = ? WHERE card_id = ?", (utc_now(), card_id))
-    records = [record for record in list_records(event_id) if record.card_id == card_id]
-    if not records:
+        return _get_one_record(event_id, card_id)
+    now = utc_now()
+    updates["reviewed_by_user"] = True
+    updates["updated_at"] = now
+    result = _db()[CARD_RECORDS].update_one({"card_id": card_id, "event_id": event_id}, {"$set": updates})
+    if result.matched_count == 0:
         raise KeyError(card_id)
-    return records[0]
+    _db()[CARDS].update_one({"_id": card_id}, {"$set": {"status": "reviewed", "updated_at": now}})
+    return _get_one_record(event_id, card_id)
 
 
 def reset_event_data(event_id: str) -> dict[str, int]:
-    with connection(db_path_for(event_id)) as conn:
-        counts = {
-            "cards": conn.execute("SELECT COUNT(*) AS count FROM cards WHERE event_id = ?", (event_id,)).fetchone()["count"],
-            "records": conn.execute("SELECT COUNT(*) AS count FROM card_records WHERE event_id = ?", (event_id,)).fetchone()["count"],
-            "exports": conn.execute("SELECT COUNT(*) AS count FROM exports WHERE event_id = ?", (event_id,)).fetchone()["count"],
-        }
-        conn.execute("DELETE FROM duplicate_links WHERE event_id = ?", (event_id,))
-        conn.execute("DELETE FROM exports WHERE event_id = ?", (event_id,))
-        conn.execute("DELETE FROM cards WHERE event_id = ?", (event_id,))
+    db = _db()
+    counts = {
+        "cards": db[CARDS].count_documents({"event_id": event_id}),
+        "records": db[CARD_RECORDS].count_documents({"event_id": event_id}),
+    }
+    db[DUPLICATE_LINKS].delete_many({"event_id": event_id})
+    db[CARDS].delete_many({"event_id": event_id})
+    db[CARD_RECORDS].delete_many({"event_id": event_id})
+    db[OCR_RESULTS].delete_many({"event_id": event_id})
+    db[FIELD_CANDIDATES].delete_many({"event_id": event_id})
+    db[AUDITS].delete_many({"event_id": event_id})
     return counts
 
 
 def find_duplicate_flag(event_id: str, *, email: str | None, phone: str | None, card_id: str) -> str:
-    with connection(db_path_for(event_id)) as conn:
-        if email:
-            row = conn.execute(
-                "SELECT card_id FROM card_records WHERE event_id = ? AND email = ? AND card_id != ? LIMIT 1",
-                (event_id, email, card_id),
-            ).fetchone()
-            if row:
-                return "Exact"
-        if phone:
-            row = conn.execute(
-                "SELECT card_id FROM card_records WHERE event_id = ? AND phone_primary = ? AND card_id != ? LIMIT 1",
-                (event_id, phone, card_id),
-            ).fetchone()
-            if row:
-                return "Exact"
+    db = _db()
+    if email and db[CARD_RECORDS].find_one(
+        {"event_id": event_id, "email": email, "card_id": {"$ne": card_id}}, {"_id": 1}
+    ):
+        return "Exact"
+    if phone and db[CARD_RECORDS].find_one(
+        {"event_id": event_id, "phone_primary": phone, "card_id": {"$ne": card_id}}, {"_id": 1}
+    ):
+        return "Exact"
     return "No"

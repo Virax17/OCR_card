@@ -42,17 +42,18 @@
       <div class="app-bar-inner">
         <div class="brand-wrap">
           <div class="brand-mark">CS</div>
+          <button id="appBarHomeBtn" class="btn icon-btn app-bar-home" type="button" aria-label="Home" title="Home" data-route="#/home">
+            <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg>
+          </button>
           <button id="appBarEvent" type="button" aria-label="Switch event">
             <span class="name">Select event</span>
             <svg class="icon" aria-hidden="true"><use href="#icon-chevron-down"/></svg>
           </button>
+          <button id="appBarDeleteBtn" class="btn danger app-bar-delete" type="button" aria-label="Delete event" title="Delete event">
+            <svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg>
+            Delete
+          </button>
           <nav id="navLinks">
-            <button class="nav-link" data-route="#/home" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg><span>Home</span>
-            </button>
-            <button class="nav-link" data-route="#/records" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg><span>Records</span>
-            </button>
             <button class="nav-link" id="navLinkScan" type="button">
               <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg><span>Scan</span>
             </button>
@@ -76,34 +77,28 @@
           <div class="skeleton-line" style="width:40%;margin-top:8px"></div>
         </div>
 
+        <div id="processingPill" class="processing-pill" role="status" aria-live="polite">
+          <span class="processing-pill-spinner" aria-hidden="true"></span>
+          <span class="processing-pill-text" id="processingPillText"></span>
+          <button id="processingPillStopBtn" class="btn danger processing-pill-stop" type="button" hidden>Stop</button>
+        </div>
+
+        <button id="queueBtn" class="btn outline block" type="button" hidden style="margin-bottom:var(--space-3)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg>
+          <span id="queueBtnText">Queue</span>
+        </button>
+
         <div class="action-row">
           <button id="dashScanBtn" class="btn primary block" type="button">
             <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg>
             Scan a card
           </button>
-          <div class="action-row-secondary">
-            <button id="dashUploadBtn" class="btn outline block" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg>
-              Upload photos
-            </button>
-            <button id="dashExportBtn" class="btn outline block" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg>
-              Export Excel
-            </button>
-          </div>
+          <button id="dashUploadBtn" class="btn text-link" type="button">
+            <svg class="icon" aria-hidden="true" style="width:16px;height:16px"><use href="#icon-image"/></svg>
+            Upload photos instead
+          </button>
           <input id="dashUploadInput" type="file" accept="image/*" multiple hidden>
         </div>
-
-        <div id="queueBanner" class="queue-banner" hidden>
-          <span id="queueBannerText">0 scans waiting for network</span>
-          <button id="queueBannerBtn" class="btn primary" type="button" style="min-height:36px;padding:6px 12px;">Process now</button>
-        </div>
-
-        <div class="section-header">
-          <span class="section-label">Processing</span>
-          <button class="section-link" data-route="#/records" type="button">View records &rarr;</button>
-        </div>
-        <div id="processingPanel" class="queue-panel"></div>
 
         <div id="usageCard" class="usage-card">
           <div class="section-label" style="margin-bottom:10px;">API usage</div>
@@ -125,9 +120,9 @@
         </div>
         <div class="chip-row" role="group" aria-label="Record filters">
           <button class="chip active" data-filter="all" type="button">All</button>
-          <button class="chip" data-filter="duplicates" type="button">Duplicates</button>
-          <button class="chip" data-filter="low" type="button">Low confidence</button>
+          <button class="chip" data-filter="needs-review" type="button">Needs review</button>
         </div>
+        <div id="recordsReviewAllWrap"></div>
 
         <div id="recordsEmptyState"></div>
         <div id="recordsList" class="records-list"></div>
@@ -139,7 +134,7 @@
             </colgroup>
             <thead>
               <tr>
-                <th>Card</th><th>Name</th><th>Company</th><th>Category</th><th>Phone</th><th>Email</th><th>Confidence</th>
+                <th>Card</th><th>Name</th><th>Company</th><th>Category</th><th>Phone</th><th>Email</th><th>Status</th>
               </tr>
             </thead>
             <tbody id="recordsTableBody"></tbody>
@@ -152,20 +147,20 @@
         <div class="screen-title-row"><h1>More</h1></div>
 
         <div class="more-section">
-          <h2>Offline queue</h2>
-          <div id="moreQueueList"></div>
-          <button id="moreProcessQueueBtn" class="btn outline block" type="button" style="margin-top:var(--space-2)">Process all now</button>
-        </div>
-
-        <div class="more-section">
           <h2>API usage</h2>
           <div id="moreUsageMeters" class="usage-card">Loading...</div>
         </div>
 
         <div class="more-section">
           <h2>Data</h2>
-          <button id="moreExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">Export Excel (current event)</button>
-          <button id="moreResetBtn" class="btn danger block" type="button">Reset event data&hellip;</button>
+          <button id="moreExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
+            <svg class="icon" aria-hidden="true" style="width:18px;height:18px"><use href="#icon-download"/></svg>
+            Export Excel (current event)
+          </button>
+          <button id="moreResetBtn" class="btn danger block" type="button">
+            <svg class="icon" aria-hidden="true" style="width:18px;height:18px"><use href="#icon-trash"/></svg>
+            Reset event data&hellip;
+          </button>
         </div>
 
         <div class="more-section">
@@ -228,11 +223,7 @@
             <svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg>
           </button>
           <button id="shutterBtn" type="button" aria-label="Capture card"></button>
-          <div style="position:relative;">
-            <button id="batchToggle" class="side-btn" type="button" aria-label="Toggle batch mode">
-              <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg>
-              <span id="batchCount" class="badge-count">0</span>
-            </button>
+          <div class="scan-controls-end">
             <button id="batchDoneBtn" type="button">Done (0)</button>
           </div>
         </div>
@@ -247,14 +238,6 @@
       </button>
       <button class="nav-item" id="navRecords" data-route="#/records" type="button">
         <svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg><span>Records</span>
-      </button>
-      <div class="nav-item nav-fab-slot">
-        <button id="navScanFab" type="button" aria-label="Scan a card">
-          <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg>
-        </button>
-      </div>
-      <button class="nav-item" id="navEvents" type="button">
-        <svg class="icon" aria-hidden="true"><use href="#icon-calendar"/></svg><span>Events</span>
       </button>
       <button class="nav-item" id="navMore" data-route="#/more" type="button">
         <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>More</span>
@@ -276,6 +259,13 @@
             <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
           </button>
         </div>
+      </div>
+      <div id="recordReviewBar" class="record-review-bar" hidden>
+        <button id="recordReviewPrevBtn" class="btn ghost icon-btn" type="button" aria-label="Previous card to review">
+          <svg class="icon" aria-hidden="true" style="width:18px;height:18px;transform:rotate(90deg)"><use href="#icon-chevron-down"/></svg>
+        </button>
+        <span id="recordReviewProgress" class="record-review-progress"></span>
+        <button id="recordReviewNextBtn" class="btn primary" type="button">Next &rarr;</button>
       </div>
       <div class="sheet-body">
         <img id="recordSheetImage" class="record-sheet-header-img" alt="Business card front">
@@ -376,6 +366,20 @@
       </div>
     </dialog>
 
+    <!-- Delete event confirmation -->
+    <dialog id="deleteEventConfirmSheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header"><h2>Delete event</h2></div>
+      <div class="sheet-body">
+        <p style="color:var(--text-dim);font-size:var(--font-sm)">This permanently deletes the event and every record, image, and OCR result in it. This cannot be undone.</p>
+        <p id="deleteEventConfirmName" style="font-weight:700;margin:var(--space-2) 0"></p>
+      </div>
+      <div class="sheet-footer">
+        <button id="deleteEventConfirmCancelBtn" class="btn outline" type="button">Cancel</button>
+        <button id="deleteEventConfirmBtn" class="btn danger" type="button">Delete event</button>
+      </div>
+    </dialog>
+
     <!-- Full image viewer -->
     <dialog id="imageDialog" class="image-dialog">
       <button id="closeImageBtn" class="btn icon-btn modal-close" type="button" aria-label="Close image" style="background:rgba(255,255,255,.15);color:#fff">
@@ -427,10 +431,14 @@
           <p id="processOfflineHint" class="process-hint" style="color:var(--warn);font-size:var(--font-sm);margin-bottom:var(--space-3)" hidden>
             Offline &mdash; photos will process automatically when you're back online.
           </p>
+          <button id="processStopBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-3)" disabled>
+            Stop processing
+          </button>
           <div id="processLiveList" class="process-live-list"></div>
         </div>
         <div class="sheet-footer" id="processLiveFooter" hidden>
-          <button id="processRetryAllBtn" class="btn outline" type="button" hidden>Retry failed</button>
+          <button id="processRetryAllBtn" class="btn outline" type="button" hidden>Retry</button>
+          <button id="processReviewBtn" class="btn outline" type="button" hidden>Review cards</button>
           <button id="processDoneBtn" class="btn primary" type="button">Done</button>
         </div>
       </div>

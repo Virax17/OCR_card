@@ -20,8 +20,9 @@
 .brand-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .brand-mark {
@@ -38,10 +39,25 @@
   font-weight: 600;
 }
 
+.app-bar-home {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.app-bar-home .icon {
+  width: 16px;
+  height: 16px;
+}
+
 #appBarEvent {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 1 auto;
+  max-width: 48vw;
   min-height: var(--touch-min);
   padding: 0 4px;
   border: 0;
@@ -64,6 +80,55 @@
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+}
+
+.app-bar-delete {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, .12);
+  color: var(--danger);
+  border: 1px solid rgba(220, 38, 38, .5);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .brand-wrap {
+    gap: 8px;
+    min-width: 0;
+  }
+
+  #appBarEvent {
+    max-width: 44vw;
+    padding-right: 0;
+  }
+
+  .app-bar-delete {
+    min-width: 36px;
+    width: 36px;
+    padding: 0;
+    gap: 0;
+    border-radius: 999px;
+  }
+
+  .app-bar-delete::after {
+    content: "";
+  }
+
+  .app-bar-delete {
+    font-size: 0;
+  }
+}
+
+.app-bar-delete .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.app-bar-delete:disabled {
+  opacity: .5;
 }
 
 #netStatus {
@@ -270,40 +335,14 @@ body.scan-open #bottomNav {
 .action-row {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-5);
-}
-
-.action-row-secondary {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2);
 }
 
 #dashScanBtn {
   height: 56px;
   font-size: var(--font-lg);
-}
-
-.queue-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  margin-bottom: var(--space-5);
-  background: var(--warn-bg);
-  color: #92400e;
-  border-radius: var(--radius-lg);
-  font-size: var(--font-sm);
-  font-weight: 600;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
 }
 
 .section-label {
@@ -312,37 +351,6 @@ body.scan-open #bottomNav {
   font-weight: 600;
   letter-spacing: .05em;
   text-transform: uppercase;
-}
-
-.section-link {
-  color: var(--teal-dark);
-  font-size: 12px;
-  font-weight: 600;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  touch-action: manipulation;
-  padding: 6px;
-}
-
-.queue-panel {
-  margin-bottom: var(--space-5);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 1px 2px rgba(20, 33, 61, .05);
-  overflow: hidden;
-  padding: 0 var(--space-4);
-}
-
-.queue-panel .queue-row {
-  padding: var(--space-3) 0;
-}
-
-.queue-panel .empty-card {
-  margin: 0 calc(var(--space-4) * -1);
-  border-radius: 0;
-  box-shadow: none;
 }
 
 .recent-list {
@@ -605,8 +613,6 @@ body.scan-open #bottomNav {
   font-size: 12px;
   font-weight: 600;
   text-align: center;
-  cursor: pointer;
-  touch-action: manipulation;
 }
 
 #scanStatusStrip.visible { display: block; }
@@ -677,24 +683,17 @@ body.scan-open #bottomNav {
   position: relative;
 }
 
-.side-btn .badge-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: var(--radius-full);
-  background: var(--amber);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  display: none;
-  align-items: center;
-  justify-content: center;
+.scan-controls .is-hidden {
+  visibility: hidden;
 }
 
-.side-btn .badge-count.visible { display: flex; }
+/* Reserves the same width as the gallery button on the opposite side so the
+   shutter stays visually centered whether or not the Done pill is showing. */
+.scan-controls-end {
+  min-width: 48px;
+  display: flex;
+  justify-content: flex-end;
+}
 
 #shutterBtn {
   width: 76px;
@@ -833,6 +832,29 @@ body.scan-open #bottomNav {
 
 .dup-banner.visible { display: block; }
 
+/* Review-queue nav bar — shown only when the record sheet was opened from
+   the Needs-review flow, lets the user step through flagged cards without
+   closing/reopening/re-finding each one in the list. */
+.record-review-bar {
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.record-review-bar:not([hidden]) {
+  display: flex;
+}
+
+.record-review-progress {
+  flex: 1;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
 /* Event sheet */
 .event-row {
   display: flex;
@@ -848,7 +870,20 @@ body.scan-open #bottomNav {
 
 .event-row:last-child { border-bottom: none; }
 
+.event-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.event-row-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 .event-row-name {
+  min-width: 0;
   font-weight: 600;
 }
 
@@ -857,12 +892,43 @@ body.scan-open #bottomNav {
   font-size: var(--font-sm);
 }
 
-.event-row .icon {
+.event-row-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.event-row-end > .icon {
   color: var(--teal);
   display: none;
 }
 
-.event-row.current .icon { display: block; }
+.event-row.current .event-row-end > .icon {
+  display: block;
+}
+
+.event-row-delete {
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--danger);
+  border: 1px solid rgba(220, 38, 38, .18);
+  background: rgba(220, 38, 38, .05);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.event-row-delete .icon-trash-visible {
+  display: block;
+  color: inherit;
+}
+
+.event-row-delete:hover,
+.event-row-delete:focus-visible {
+  background: rgba(220, 38, 38, .1);
+  border-color: rgba(220, 38, 38, .35);
+}
 
 #eventCreateForm {
   display: none;
@@ -925,17 +991,6 @@ body.scan-open #bottomNav {
   flex: 1;
   min-width: 0;
 }
-
-.status-chip {
-  border-radius: var(--radius-full);
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.status-chip.waiting, .status-chip.pending { background: #eef0f4; color: var(--text-dim); }
-.status-chip.uploading { background: var(--warn-bg); color: var(--warn); }
-.status-chip.failed { background: var(--danger-bg); color: var(--danger); }
 
 .health-list {
   display: flex;
@@ -1163,5 +1218,3 @@ body.scan-open #bottomNav {
   align-items: center;
   gap: var(--space-2);
 }
-
-.status-chip.done { background: var(--success-bg); color: var(--success); }

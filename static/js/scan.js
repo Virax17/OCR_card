@@ -6,7 +6,9 @@ let stream = null;
 let currentSide = "front";
 let frontBlob = null;
 let backBlob = null;
-let batchMode = false;
+// Accumulating multi-shot set — starts empty. There's no explicit "batch
+// mode" toggle: pressing the shutter again before confirming the first shot
+// is itself the signal that the user is capturing several cards in a row.
 let batchItems = []; // { blob, url }
 let stats = { processing: 0, done: 0, failed: 0 };
 let returnRoute = "#/home";
@@ -18,14 +20,10 @@ export function wireScanScreen() {
   $("#scanGalleryInput").addEventListener("change", handleGalleryChange);
   $("#shutterBtn").addEventListener("click", handleShutter);
   $("#scanPlayBtn").addEventListener("click", () => playVideo("Tap to retry camera"));
-  $("#batchToggle").addEventListener("click", toggleBatchMode);
   $("#batchDoneBtn").addEventListener("click", finishBatch);
   $("#reviewRetakeBtn").addEventListener("click", retakePhoto);
   $("#reviewAddBackBtn").addEventListener("click", addBackSide);
   $("#reviewUsePhotoBtn").addEventListener("click", usePhoto);
-  $("#scanStatusStrip").addEventListener("click", () => {
-    import("./more.js").then(({ openQueueSheetFromScan }) => openQueueSheetFromScan?.());
-  });
   document.querySelectorAll("#sideToggle button").forEach((btn) => {
     btn.addEventListener("click", () => setSide(btn.dataset.side));
   });
@@ -218,18 +216,14 @@ function setSide(side) {
   });
 }
 
-function toggleBatchMode() {
-  batchMode = !batchMode;
-  $("#batchToggle").classList.toggle("active", batchMode);
-  $("#scanGalleryBtn").classList.toggle("is-hidden", batchMode);
-  $("#batchDoneBtn").classList.toggle("visible", batchMode);
-  $("#batchTray").classList.toggle("visible", batchMode && batchItems.length > 0);
-  if (!batchMode) resetBatch();
-}
-
 function resetBatch() {
   batchItems.forEach((item) => URL.revokeObjectURL(item.url));
   batchItems = [];
+  renderBatchTray();
+}
+
+function addToBatch(blob) {
+  batchItems.push({ blob, url: URL.createObjectURL(blob) });
   renderBatchTray();
 }
 
@@ -240,12 +234,28 @@ async function handleShutter() {
     showToast("Camera isn't ready yet — wait a moment and try again.", "error");
     return;
   }
-  if (batchMode) {
-    const url = URL.createObjectURL(blob);
-    batchItems.push({ blob, url });
-    renderBatchTray();
+
+  // Already accumulating a multi-shot set — keep adding silently to the
+  // tray instead of showing a per-shot review (arity-adaptive: once the
+  // user is clearly capturing several cards in a row, stay out of their way).
+  if (batchItems.length > 0) {
+    addToBatch(blob);
     return;
   }
+
+  // A front capture is already awaiting confirmation and the shutter was
+  // pressed again — that's the multi-card signal. Fold the pending shot
+  // into a new accumulating set along with this one, instead of silently
+  // overwriting it.
+  if (currentSide === "front" && frontBlob && $("#scanReviewSheet").classList.contains("visible")) {
+    const previous = frontBlob;
+    frontBlob = null;
+    hideReview();
+    addToBatch(previous);
+    addToBatch(blob);
+    return;
+  }
+
   if (currentSide === "front") {
     frontBlob = blob;
   } else {
@@ -282,21 +292,19 @@ function renderBatchTray() {
       renderBatchTray();
     });
   });
-  $("#batchCount").textContent = String(batchItems.length);
-  $("#batchCount").classList.toggle("visible", batchItems.length > 0);
   $("#batchDoneBtn").textContent = `Done (${batchItems.length})`;
-  $("#batchTray").classList.toggle("visible", batchMode && batchItems.length > 0);
+  $("#batchDoneBtn").classList.toggle("visible", batchItems.length > 0);
+  $("#batchTray").classList.toggle("visible", batchItems.length > 0);
+  // Gallery import provides its own multi-photo path; hide it while an
+  // in-camera multi-shot set is accumulating to avoid two competing ways in.
+  $("#scanGalleryBtn").classList.toggle("is-hidden", batchItems.length > 0);
 }
 
 async function finishBatch() {
-  if (!batchItems.length) {
-    toggleBatchMode();
-    return;
-  }
+  if (!batchItems.length) return;
   // Hand the captured blobs to the preview/confirm sheet, then clear the tray.
   const blobs = batchItems.map((item) => item.blob);
   resetBatch();
-  toggleBatchMode();
   const { openProcessSheet } = await import("./process-sheet.js");
   openProcessSheet(blobs.map((blob) => ({ blob })));
 }

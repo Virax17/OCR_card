@@ -1,6 +1,5 @@
 import * as api from "./api.js";
 import { escapeHtml } from "./utils.js";
-import { getQueueSnapshot, removeQueueItem, retryQueueItem } from "./queue.js";
 import { usagePanelHtml } from "./usage-panel.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -8,9 +7,6 @@ const $ = (selector) => document.querySelector(selector);
 let deferredInstallPrompt = null;
 
 export function wireMoreScreen() {
-  $("#moreProcessQueueBtn").addEventListener("click", () => {
-    window.dispatchEvent(new CustomEvent("attemptQueueFlush"));
-  });
   $("#moreExportBtn").addEventListener("click", async () => {
     const { state, showToast } = await import("./app-shell.js");
     if (!state.eventId) return showToast("Select an event first.", "error");
@@ -35,39 +31,11 @@ export function wireMoreScreen() {
     $("#installAppBtn").hidden = true;
   });
 
-  window.addEventListener("queueChanged", async () => {
-    const { state } = await import("./app-shell.js");
-    if (state.route === "#/more") renderQueueList();
-  });
 }
 
 export async function refreshMoreScreen(state) {
-  renderQueueList();
   renderUsage(state);
   await renderHealth(state);
-}
-
-function renderQueueList() {
-  const list = $("#moreQueueList");
-  const queue = getQueueSnapshot();
-  if (!queue.length) {
-    list.innerHTML = `<p style="color:var(--text-dim);font-size:var(--font-sm)">Queue is empty.</p>`;
-    return;
-  }
-  list.innerHTML = queue.map((item) => `
-    <div class="queue-row" data-id="${item.id}">
-      ${item.thumbUrl ? `<img src="${item.thumbUrl}" alt="">` : `<div style="width:44px;height:44px;border-radius:8px;background:#eef0f4"></div>`}
-      <div class="queue-row-body">
-        <div style="font-weight:700;font-size:var(--font-sm)">${escapeHtml(item.eventId)}</div>
-        <div style="color:var(--text-dim);font-size:12px">${escapeHtml(new Date(item.capturedAt).toLocaleTimeString())}</div>
-      </div>
-      <span class="status-chip ${item.status}">${item.status === "failed" ? "Failed" : item.status === "uploading" ? "Uploading" : "Waiting"}</span>
-      ${item.status === "failed" ? `<button class="btn outline" data-retry="${item.id}" style="min-height:36px;padding:6px 10px;">Retry</button>` : ""}
-    </div>
-  `).join("");
-  list.querySelectorAll("[data-retry]").forEach((btn) => {
-    btn.addEventListener("click", () => retryQueueItem(Number(btn.dataset.retry)));
-  });
 }
 
 function renderUsage(state) {

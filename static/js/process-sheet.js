@@ -1,10 +1,10 @@
-import { enqueueCapture, retryQueueItem } from "./queue.js";
-import { escapeHtml } from "./utils.js";
+import { enqueueCapture, retryQueueItem, stopProcessing, isStopRequested, getQueueSnapshot } from "./queue.js";
+import { escapeHtml, needsReview } from "./utils.js";
 
 const $ = (selector) => document.querySelector(selector);
 
 // One entry per selected photo: { clientId, blob, name, url, queueId, status }.
-// status ∈ "waiting" | "uploading" | "done" | "failed".
+// status ∈ "waiting" | "uploading" | "done" | "failed" | "cancelled".
 let selected = [];
 let processing = false; // true once the user confirms and the live view is active
 let clientSeq = 0;
@@ -17,6 +17,8 @@ export function wireProcessSheet() {
   $("#processDoneBtn").addEventListener("click", () => sheet.close());
   $("#processConfirmBtn").addEventListener("click", startProcessing);
   $("#processRetryAllBtn").addEventListener("click", retryAllFailed);
+  $("#processStopBtn").addEventListener("click", handleStop);
+  $("#processReviewBtn").addEventListener("click", handleReviewFlagged);
 
   // Backdrop click closes (mirrors the other dialog sheets).
   sheet.addEventListener("click", (event) => {
@@ -31,6 +33,50 @@ export function wireProcessSheet() {
   window.addEventListener("queueChanged", handleQueueChangedForLive);
   window.addEventListener("online", updateOfflineHint);
   window.addEventListener("offline", updateOfflineHint);
+}
+
+// Open queue viewer to show items currently in the queue (not for editing).
+export async function openQueueSheet() {
+  const sheet = $("#processSheet");
+  if (sheet.open) return;
+
+  const queue = getQueueSnapshot();
+  if (!queue.length) return;
+
+  // Show the live view directly with current queue items
+  $("#processConfirmView").hidden = true;
+  $("#processLiveView").hidden = false;
+  $("#processLiveFooter").hidden = true;
+  $("#processLiveCloseBtn").hidden = false;
+  $("#processRetryAllBtn").hidden = true;
+  $("#processReviewBtn").hidden = true;
+  $("#processStopBtn").disabled = queue.some(it => it.status === "uploading" || it.status === "pending") ? false : true;
+  $("#processLiveTitle").textContent = "Queue";
+
+  // Populate with queue items
+  renderLiveListFromQueue(queue);
+  updateMeterFromQueue(queue);
+  sheet.showModal();
+}
+
+function renderLiveListFromQueue(queue) {
+  const list = $("#processLiveList");
+  list.innerHTML = queue.map((it) => `
+    <div class="queue-row" data-queue-id="${it.id}">
+      <img src="${it.thumbUrl}" alt="" style="width:60px;height:60px;object-fit:cover;border-radius:4px;">
+      <div class="queue-row-body"><div class="name">${it.id}</div></div>
+      <div class="row-actions"><span class="status-chip ${it.status}">${it.status}</span></div>
+    </div>
+  `).join("");
+}
+
+function updateMeterFromQueue(queue) {
+  const total = queue.length;
+  const finished = queue.filter((it) => it.status === "done" || it.status === "failed" || it.status === "cancelled").length;
+  const pct = total ? Math.round((finished / total) * 100) : 0;
+  const fill = $("#processProgressFill");
+  fill.style.width = `${pct}%`;
+  $("#processProgressValue").textContent = `${finished} / ${total}`;
 }
 
 // items: [{ blob, name? }]
@@ -56,6 +102,8 @@ export async function openProcessSheet(items) {
   $("#processLiveFooter").hidden = true;
   $("#processLiveCloseBtn").hidden = true;
   $("#processRetryAllBtn").hidden = true;
+  $("#processReviewBtn").hidden = true;
+  $("#processStopBtn").disabled = true;
   $("#processLiveTitle").textContent = "Processing…";
 
   renderGrid();
@@ -105,6 +153,7 @@ async function startProcessing() {
   processing = true;
   $("#processConfirmView").hidden = true;
   $("#processLiveView").hidden = false;
+  $("#processStopBtn").disabled = false;
   updateOfflineHint();
   renderLiveList();
   updateMeter();
@@ -112,8 +161,11 @@ async function startProcessing() {
   // Enqueue sequentially; record the queue id the queue now returns so we can
   // correlate each photo through to completion.
   for (const it of selected) {
+    if (isStopRequested()) break;
     const record = await enqueueCapture(state.eventId, it.blob, null);
     it.queueId = record.id ?? null;
+    if (isStopRequested()) break;
+    await yieldToBrowser();
   }
 }
 
@@ -137,12 +189,13 @@ function statusChipHtml(it) {
     uploading: "Processing…",
     done: "✓ Done",
     failed: "⚠ Failed",
+    cancelled: "Stopped",
   };
   return `<span class="status-chip ${it.status}">${labels[it.status]}</span>`;
 }
 
 function retryButtonHtml(it) {
-  if (it.status !== "failed" || it.queueId == null) return "";
+  if ((it.status !== "failed" && it.status !== "cancelled") || it.queueId == null) return "";
   return `<button class="btn ghost" type="button" data-retry="${it.clientId}">Retry</button>`;
 }
 
@@ -156,48 +209,91 @@ function renderRow(it) {
 
 function updateMeter() {
   const total = selected.length;
-  const finished = selected.filter((it) => it.status === "done" || it.status === "failed").length;
+  const finished = selected.filter((it) => it.status === "done" || it.status === "failed" || it.status === "cancelled").length;
   const failed = selected.filter((it) => it.status === "failed").length;
+  const cancelled = selected.filter((it) => it.status === "cancelled").length;
   const pct = total ? Math.round((finished / total) * 100) : 0;
   const fill = $("#processProgressFill");
   fill.style.width = `${pct}%`;
-  fill.classList.toggle("warning", failed > 0);
+  fill.classList.toggle("warning", failed > 0 || cancelled > 0);
   $("#processProgressValue").textContent = `${finished} / ${total}`;
 
   if (finished === total && total > 0) {
-    showCompletion(total, finished - failed, failed);
+    showCompletion(total, finished - failed - cancelled, failed, cancelled);
   }
 }
 
-function showCompletion(total, done, failed) {
-  $("#processLiveTitle").textContent = failed
-    ? `Processed ${done}, ${failed} need${failed === 1 ? "s" : ""} review`
-    : `All ${total} processed`;
+async function showCompletion(total, done, failed, cancelled = 0) {
+  const parts = [`${done} processed`];
+  if (failed) parts.push(`${failed} failed`);
+  if (cancelled) parts.push(`${cancelled} stopped`);
+  $("#processLiveTitle").textContent = failed || cancelled ? parts.join(", ") : `All ${total} processed`;
+  $("#processStopBtn").disabled = true;
   $("#processLiveFooter").hidden = false;
   $("#processLiveCloseBtn").hidden = false;
-  $("#processRetryAllBtn").hidden = failed === 0;
+  $("#processRetryAllBtn").hidden = failed === 0 && cancelled === 0;
+
+  // Direct route into fixing mistakes right from the results screen, instead
+  // of just "Done" and having to go find flagged cards elsewhere.
+  const { state } = await import("./app-shell.js");
+  const flagged = state.records.filter(needsReview);
+  const reviewBtn = $("#processReviewBtn");
+  reviewBtn.textContent = `Review ${flagged.length} card${flagged.length === 1 ? "" : "s"} →`;
+  reviewBtn.hidden = flagged.length === 0;
 }
 
-function handleQueueItemProcessed(event) {
-  if (!processing) return;
+async function handleStop() {
+  const stopBtn = $("#processStopBtn");
+  if (stopBtn) stopBtn.disabled = true;
+  processing = false;
+  stopProcessing();
+  updateOfflineHint();
+  updateMeter();
+  const closeBtn = $("#processLiveCloseBtn");
+  if (closeBtn) closeBtn.hidden = false;
+  const footer = $("#processLiveFooter");
+  if (footer) footer.hidden = false;
+  const { showToast } = await import("./app-shell.js");
+  showToast("Terminated — remaining photos were not processed.", "info");
+}
+
+async function handleReviewFlagged() {
+  const { state } = await import("./app-shell.js");
+  const { openReviewQueue } = await import("./records.js");
+  const flagged = state.records.filter(needsReview);
+  $("#processSheet").close();
+  openReviewQueue(flagged);
+}
+
+async function handleQueueItemProcessed(event) {
+  if (!processing && !isStopRequested()) return;
   const id = event.detail?.id;
   if (id == null) return;
   const it = selected.find((entry) => entry.queueId === id);
   if (!it) return;
-  it.status = event.detail.success ? "done" : "failed";
+  it.status = event.detail.cancelled ? "cancelled" : event.detail.success ? "done" : "failed";
   renderRow(it);
+  // Keep Home/Records live during the batch (not just at the very end) —
+  // this is what makes the "Needs review" card and processing pill actually
+  // reflect reality while a bulk upload is still running.
+  const { refreshAll } = await import("./app-shell.js");
+  await refreshAll();
   updateMeter();
 }
 
-// Upgrade waiting photos to "uploading" as the queue picks them up.
+// Sync waiting/not-yet-started photos with the queue's live status: pick up
+// "uploading" as the queue starts them, and "cancelled" for items a Stop hit
+// before they ever started (those never fire queueItemProcessed).
 function handleQueueChangedForLive(event) {
-  if (!processing) return;
+  if (!processing && !isStopRequested()) return;
   const items = event.detail?.items || [];
-  const uploadingIds = new Set(items.filter((i) => i.status === "uploading").map((i) => i.id));
+  const statusById = new Map(items.map((i) => [i.id, i.status]));
   let changed = false;
   for (const it of selected) {
-    if (it.status === "waiting" && it.queueId != null && uploadingIds.has(it.queueId)) {
-      it.status = "uploading";
+    if (it.queueId == null) continue;
+    const liveStatus = statusById.get(it.queueId);
+    if (it.status === "waiting" && (liveStatus === "uploading" || liveStatus === "cancelled")) {
+      it.status = liveStatus;
       renderRow(it);
       changed = true;
     }
@@ -218,7 +314,7 @@ async function retryOne(clientId) {
 }
 
 async function retryAllFailed() {
-  const failed = selected.filter((it) => it.status === "failed" && it.queueId != null);
+  const failed = selected.filter((it) => (it.status === "failed" || it.status === "cancelled") && it.queueId != null);
   if (!failed.length) return;
   for (const it of failed) {
     it.status = "waiting";
@@ -238,11 +334,17 @@ function updateOfflineHint() {
   hint.hidden = navigator.onLine || !processing;
 }
 
+function yieldToBrowser() {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 // Runs on every close (Cancel, Done, Esc, backdrop). Enqueued items keep
 // processing in the background via the durable queue — we only tear down the UI
 // and release the object URLs this sheet owns.
 function cleanup() {
   processing = false;
+  const stopBtn = $("#processStopBtn");
+  if (stopBtn) stopBtn.disabled = true;
   for (const it of selected) {
     if (it.url) URL.revokeObjectURL(it.url);
   }

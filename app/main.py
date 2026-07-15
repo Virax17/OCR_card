@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import shutil
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import (
     DEFAULT_EVENT_DATE,
     DEFAULT_EVENT_ID,
     DEFAULT_EVENT_NAME,
-    EVENTS_ROOT,
     GEMINI_DAILY_REQUEST_LIMIT_PER_PROJECT,
     GEMINI_DAILY_TOKEN_LIMIT_PER_PROJECT,
     GEMINI_MINUTE_REQUEST_LIMIT_PER_PROJECT,
@@ -21,7 +20,7 @@ from app.config import (
     MAX_UPLOAD_BYTES,
 )
 from app.extraction.candidate_extractors import extract_candidates
-from app.imaging.preprocess import preprocess_image
+from app.imaging.preprocess import compress_for_storage, preprocess_image
 from app.llm.gemini_client import (
     gemini_key_labels,
     is_gemini_configured,
@@ -31,14 +30,16 @@ from app.llm.gemini_client import (
 )
 from app.llm.usage_monitor import provider_usage_snapshot, usage_snapshot
 from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, UpdateRecordIn
-from app.storage import mongo_usage
+from app.storage import mongo, mongo_usage
 from app.ocr.google_vision import extract_text_combined as google_vision_extract_combined
 from app.ocr.google_vision import is_google_vision_configured
-from app.storage.db import event_dir, initialize_event_database, new_id, utc_now
-from app.storage.excel_writer import export_records
+from app.storage.db import new_id, utc_now
+from app.storage.excel_writer import build_workbook_bytes
 from app.storage.repositories import (
     create_card,
+    delete_event as delete_event_data,
     ensure_event,
+    ensure_indexes,
     find_duplicate_flag,
     get_event,
     insert_field_candidates,
@@ -47,9 +48,12 @@ from app.storage.repositories import (
     list_events,
     list_records,
     reset_event_data,
+    save_audit,
     update_record,
     upsert_card_record,
 )
+
+IMAGES_BUCKET_FIELD = "images"
 
 app = FastAPI(title="LLM Business Card Scanner")
 
@@ -60,15 +64,14 @@ if STATIC_DIR.exists():
 
 @app.on_event("startup")
 async def startup() -> None:
-    EVENTS_ROOT.mkdir(parents=True, exist_ok=True)
-    initialize_event_database(
-        EVENTS_ROOT,
-        event_id=DEFAULT_EVENT_ID,
-        name=DEFAULT_EVENT_NAME,
-        date=DEFAULT_EVENT_DATE,
-        location="Local",
-        notes="Default event",
-    )
+    # All durable data lives in MongoDB now (no local disk). Create indexes and
+    # seed the default event; tolerate a slow/unreachable Mongo at boot so the
+    # health check can still report status instead of crashing the process.
+    try:
+        ensure_indexes()
+        ensure_event(DEFAULT_EVENT_ID, DEFAULT_EVENT_NAME, DEFAULT_EVENT_DATE, "Local")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.get("/")
@@ -104,7 +107,7 @@ async def health() -> dict:
         "gemini_key_count": len(gemini_key_labels()),
         "google_vision_configured": is_google_vision_configured(),
         "mongo_usage": mongo_usage.config_report(),
-        "storage_root": str(EVENTS_ROOT),
+        "storage": "mongodb",
         "default_event_id": DEFAULT_EVENT_ID,
     }
 
@@ -129,6 +132,22 @@ async def api_create_event(payload: EventIn) -> EventOut:
     return event
 
 
+@app.delete("/events/{event_id}")
+async def api_delete_event(event_id: str) -> dict:
+    if not get_event(event_id):
+        raise HTTPException(status_code=404, detail="Event not found")
+    database_counts = delete_event_data(event_id)
+    images_removed = clear_event_images(event_id)
+    return {
+        "event_id": event_id,
+        "status": "deleted",
+        "deleted": {
+            **database_counts,
+            "images": images_removed,
+        },
+    }
+
+
 async def read_upload(file: UploadFile | None) -> bytes | None:
     if file is None:
         return None
@@ -139,46 +158,81 @@ async def read_upload(file: UploadFile | None) -> bytes | None:
 
 
 def save_side_file(event_id: str, card_id: str, side: str, upload: UploadFile, image_bytes: bytes) -> str:
-    suffix = Path(upload.filename or f"{side}.jpg").suffix.lower() or ".jpg"
-    filename = f"{card_id}_{side}{suffix}"
-    path = event_dir(EVENTS_ROOT, event_id) / "images" / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(image_bytes)
+    """Compress the upload and store it in GridFS. Returns the logical filename.
+
+    The stored copy is a downscaled/re-encoded JPEG (see compress_for_storage) so
+    the database stays small; the original full-size bytes are never persisted.
+    """
+    filename = f"{card_id}_{side}.jpg"
+    stored = compress_for_storage(image_bytes)
+    bucket = mongo.get_gridfs()
+    if bucket is None:
+        raise HTTPException(status_code=503, detail="Image storage (MongoDB) is unavailable")
+    # Drop any previous file with this name (e.g. a retake) so we don't accumulate.
+    _delete_gridfs_by_name(filename)
+    bucket.upload_from_stream(
+        filename,
+        BytesIO(stored),
+        metadata={
+            "event_id": event_id,
+            "card_id": card_id,
+            "side": side,
+            "content_type": "image/jpeg",
+            "original_bytes": len(image_bytes),
+            "stored_bytes": len(stored),
+        },
+    )
     return filename
 
 
+def _delete_gridfs_by_name(filename: str) -> None:
+    db = mongo.get_database()
+    bucket = mongo.get_gridfs()
+    if db is None or bucket is None:
+        return
+    for existing in db["fs.files"].find({"filename": filename}, {"_id": 1}):
+        try:
+            bucket.delete(existing["_id"])
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_gridfs_image(filename: str) -> tuple[bytes, str] | None:
+    bucket = mongo.get_gridfs()
+    if bucket is None:
+        return None
+    try:
+        stream = bucket.open_download_stream_by_name(filename)
+        data = stream.read()
+        content_type = (stream.metadata or {}).get("content_type", "image/jpeg")
+        return data, content_type
+    except Exception:  # noqa: BLE001 — includes NoFile
+        return None
+
+
 def save_llm_audit(event_id: str, card_id: str, fields: dict) -> None:
-    audit_path = event_dir(EVENTS_ROOT, event_id) / "ocr" / f"{card_id}_llm_transcript.txt"
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence = fields.get("field_evidence")
-    uncertain = fields.get("uncertain_fields")
     sections = [
-        "FRONT TEXT",
-        str(fields.get("front_text") or ""),
-        "",
-        "BACK TEXT",
-        str(fields.get("back_text") or ""),
-        "",
-        "ALL VISIBLE TEXT",
-        str(fields.get("all_visible_text") or ""),
-        "",
-        "FIELD EVIDENCE",
-        json_dumps_pretty(evidence),
-        "",
-        "UNCERTAIN FIELDS",
-        json_dumps_pretty(uncertain),
+        "FRONT TEXT", str(fields.get("front_text") or ""), "",
+        "BACK TEXT", str(fields.get("back_text") or ""), "",
+        "ALL VISIBLE TEXT", str(fields.get("all_visible_text") or ""), "",
+        "FIELD EVIDENCE", json_dumps_pretty(fields.get("field_evidence")), "",
+        "UNCERTAIN FIELDS", json_dumps_pretty(fields.get("uncertain_fields")),
     ]
-    audit_path.write_text("\n".join(sections), encoding="utf-8")
+    try:
+        save_audit(event_id, card_id, "llm_transcript", "\n".join(sections))
+    except Exception:  # noqa: BLE001 — audits are debug-only, never break a scan
+        pass
 
 
 def save_ocr_audit(event_id: str, card_id: str, ocr_results: list) -> None:
-    audit_path = event_dir(EVENTS_ROOT, event_id) / "ocr" / f"{card_id}_google_vision_ocr.json"
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
     payload = [
         result.model_dump() if hasattr(result, "model_dump") else result.dict()
         for result in ocr_results
     ]
-    audit_path.write_text(json_dumps_pretty(payload), encoding="utf-8")
+    try:
+        save_audit(event_id, card_id, "google_vision_ocr", json_dumps_pretty(payload))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def json_dumps_pretty(value) -> str:
@@ -187,19 +241,20 @@ def json_dumps_pretty(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2) if value is not None else ""
 
 
-def clear_event_artifacts(event_id: str) -> dict[str, int]:
-    root = event_dir(EVENTS_ROOT, event_id).resolve()
-    cleared: dict[str, int] = {}
-    for folder_name in ("images", "ocr", "exports"):
-        folder = (root / folder_name).resolve()
-        if root not in folder.parents:
-            raise HTTPException(status_code=400, detail="Invalid event artifact path")
-        count = len([path for path in folder.rglob("*") if path.is_file()]) if folder.exists() else 0
-        if folder.exists():
-            shutil.rmtree(folder)
-        folder.mkdir(parents=True, exist_ok=True)
-        cleared[folder_name] = count
-    return cleared
+def clear_event_images(event_id: str) -> int:
+    """Delete all GridFS images belonging to an event. Returns the count removed."""
+    db = mongo.get_database()
+    bucket = mongo.get_gridfs()
+    if db is None or bucket is None:
+        return 0
+    count = 0
+    for existing in db["fs.files"].find({"metadata.event_id": event_id}, {"_id": 1}):
+        try:
+            bucket.delete(existing["_id"])
+            count += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return count
 
 
 def enforce_usage_limits(required: dict[str, int]) -> None:
@@ -469,13 +524,13 @@ async def reset_cards(event_id: str) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
     database_counts = reset_event_data(event_id)
-    artifact_counts = clear_event_artifacts(event_id)
+    images_removed = clear_event_images(event_id)
     return {
         "event_id": event_id,
         "status": "reset",
         "deleted": {
             **database_counts,
-            **artifact_counts,
+            "images": images_removed,
         },
     }
 
@@ -543,16 +598,25 @@ async def patch_record(event_id: str, card_id: str, payload: UpdateRecordIn) -> 
 
 
 @app.get("/events/{event_id}/download")
-async def download_excel(event_id: str) -> FileResponse:
+async def download_excel(event_id: str) -> StreamingResponse:
     records_for_event = list_records(event_id)
-    output = event_dir(EVENTS_ROOT, event_id) / "exports" / "contacts.xlsx"
-    export_records(records_for_event, output)
-    return FileResponse(output, filename=f"{event_id}_contacts.xlsx")
+    # Images come from GridFS (no local files); the workbook is built in memory
+    # and streamed straight back — nothing is written to disk.
+    workbook_bytes = build_workbook_bytes(
+        records_for_event,
+        image_provider=lambda filename: (_read_gridfs_image(filename) or (None, None))[0],
+    )
+    return StreamingResponse(
+        BytesIO(workbook_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{event_id}_contacts.xlsx"'},
+    )
 
 
 @app.get("/events/{event_id}/images/{filename}")
-async def get_image(event_id: str, filename: str) -> FileResponse:
-    path = event_dir(EVENTS_ROOT, event_id) / "images" / filename
-    if not path.exists():
+async def get_image(event_id: str, filename: str) -> Response:
+    image = _read_gridfs_image(filename)
+    if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
-    return FileResponse(path)
+    data, content_type = image
+    return Response(content=data, media_type=content_type)
