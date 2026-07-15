@@ -130,6 +130,14 @@ NAME_VS_COMPANY_PROCEDURE = """
 Name vs. Business/Company — follow this procedure in order every time, because
 mixing these two up is the most common mistake on this task:
 
+Step 0. READ FIRST, CLASSIFY SECOND.
+   Before assigning any field, read ALL lines on the card from top to bottom.
+   Write out a mental list of every line and what it most likely represents
+   (company brand, person name, job title, phone, email, address, etc.).
+   Do NOT jump to conclusions from the first line — the person's name may
+   appear below the company name, and a large word at the top is almost always
+   a brand, not a person.
+
 Step 1. List every distinct printed line on the front side (and back side only
 if the front has no company line at all).
 
@@ -158,6 +166,18 @@ true:
    - It is not identical (ignoring case/spacing) to whatever line you already
      marked as the company in Step 2.
 
+Step 3b. Mark a line as a DESIGNATION candidate if it reads like a job role:
+   - Director, Manager, Engineer, Officer, Executive, President, CEO, COO,
+     Founder, Consultant, Specialist, Coordinator, Supervisor, Analyst, Head,
+     Procurement, Sales, Marketing, Operations, Technical, Regional, Senior,
+     Junior, Assistant, Deputy, General Manager, Plant Manager, etc.
+   - A designation is NEVER a company name, NEVER a person name by itself.
+   - If a line contains BOTH a person name and a designation separated by a
+     comma, dash, or slash (e.g. "Ahmad Rizal, Sales Manager"), split it:
+     the human-name portion is `name`, the role portion is `designation`.
+   - If a designation line appears ABOVE a name line, it is still a
+     designation — do not promote it to the name field.
+
 Step 4. Resolve conflicts — a line CANNOT be both:
    - If a line satisfies both Step 2 and Step 3 (rare), Step 2 always wins:
      treat it as the company, not the name. A stylized all-caps single word
@@ -174,17 +194,56 @@ Step 4. Resolve conflicts — a line CANNOT be both:
    - An honorific prefix (Mr./Mrs./Ms./Dr./Ir./Prof./Haji) or post-nominal
      letters (e.g. "B.Eng", "M.T.") stay attached to the name line and do not
      disqualify it from being a person name.
+   - DESIGNATION vs NAME confusion: if you are unsure whether a short text
+     is a name or a job title, check if it contains a role keyword from
+     Step 3b. If it does, it is a designation, not a name.
 
 Step 5. Before finalizing, sanity-check both fields against each other:
    - `name` must never equal `business`/`company` (case-insensitively).
+   - `designation` must never equal `name` or `business`/`company`.
    - `business`/`company` must never be a personal name with no legal suffix
      and no business noun and no top-of-card logo positioning — if nothing on
      the card qualifies as a company under Step 2, return business = null
      rather than guessing a person's name is the company.
+   - Re-read the OCR lines one final time and confirm that each assigned field
+     value is actually printed on the card as-is and is not a mix-up.
 """.strip()
 
 
-def _key_label(api_key: str | None, index: int | None = None) -> str | None:
+THINK_BEFORE_CLASSIFY = """
+Before writing any JSON output, work through these reasoning steps internally:
+
+REASONING STEP A — List all lines:
+  For each line visible on the card (front then back), write: LINE: "<text>" → LIKELY ROLE: <company|name|designation|phone|email|address|other>
+
+REASONING STEP B — Identify the company:
+  Which line is the top-most brand/logo text? Does it contain a legal entity suffix or business noun?
+  → Company = <that line>
+
+REASONING STEP C — Identify the person name:
+  Is there a line of 1-5 human-name-shaped words that is:
+    (a) NOT the company line,
+    (b) near a designation/job-title line (above or below it),
+    (c) free of legal entity suffixes and business nouns?
+  → Name = <that line>, or null if none qualifies.
+
+REASONING STEP D — Identify the designation:
+  Is there a job-role line (Director / Manager / Engineer / Officer / etc.)?
+  Is it directly adjacent to the name candidate?
+  → Designation = <that line>
+  If a single line reads "Ahmad Rizal, Sales Manager", split it:
+    Name = "Ahmad Rizal", Designation = "Sales Manager"
+
+REASONING STEP E — Final sanity check before output:
+  1. Name ≠ Company (if they match, set name = null)
+  2. Designation ≠ Name and Designation ≠ Company
+  3. Every field value must be a verbatim substring of the OCR text (except category/country)
+  4. If you are uncertain about name or designation, add that field to uncertain_fields
+
+Only after completing steps A–E, write the JSON output.
+""".strip()
+
+
     if not api_key:
         return None
     digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:8]

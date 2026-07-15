@@ -69,6 +69,7 @@ function wireNav() {
     });
   });
   $("#navLinkScan")?.addEventListener("click", () => openScanScreen());
+  $("#navScanFab")?.addEventListener("click", () => openScanScreen());
   $("#appBarEvent").addEventListener("click", () => openEventSheet());
   $("#netStatus").addEventListener("click", () => {
     window.location.hash = "#/more";
