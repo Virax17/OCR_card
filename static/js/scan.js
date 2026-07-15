@@ -19,7 +19,6 @@ export function wireScanScreen() {
   $("#scanFallbackGalleryBtn").addEventListener("click", () => $("#scanGalleryInput").click());
   $("#scanGalleryInput").addEventListener("change", handleGalleryChange);
   $("#shutterBtn").addEventListener("click", handleShutter);
-  $("#scanPlayBtn").addEventListener("click", () => playVideo("Tap to retry camera"));
   $("#batchDoneBtn").addEventListener("click", finishBatch);
   $("#reviewRetakeBtn").addEventListener("click", retakePhoto);
   $("#reviewAddBackBtn").addEventListener("click", addBackSide);
@@ -75,7 +74,6 @@ const CAMERA_CONSTRAINTS = [
 async function startCamera() {
   stopCamera();
   $("#scanFallback").classList.remove("is-active");
-  $("#scanPlayBtn").hidden = true;
   $("#scanVideo").style.display = "block";
   prepareVideoElement();
 
@@ -96,7 +94,9 @@ async function startCamera() {
   }
 
   $("#scanVideo").srcObject = stream;
-  await playVideo("Tap to start camera");
+  if (!(await playVideo())) {
+    showFallback("Camera preview couldn't start. You can still import photos from your gallery.");
+  }
 }
 
 async function openCameraStream() {
@@ -161,39 +161,37 @@ function waitForVideoFrame(video, timeoutMs = 3500) {
   });
 }
 
-function showPlayPrompt(message = "Tap to start camera") {
-  const button = $("#scanPlayBtn");
-  button.textContent = message;
-  button.hidden = false;
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function playVideo(promptMessage) {
+// A muted, playsinline, autoplay video is allowed to start without any user
+// gesture in every modern engine, but right after assigning srcObject the
+// stream can still be negotiating — play() occasionally rejects or resolves
+// before a frame is actually decoded. That's a transient race, not a real
+// autoplay-policy block, so retry silently with backoff instead of stopping
+// the camera on a "tap to start" gate.
+const PLAY_RETRY_ATTEMPTS = 6;
+
+async function playVideo() {
   const video = $("#scanVideo");
   prepareVideoElement();
-  try {
-    await video.play();
-  } catch (error) {
-    // Some mobile browsers (notably iOS Safari) can reject autoplay of a
-    // srcObject stream even inside a user gesture — the stream stays live
-    // but the video never renders, leaving a black viewfinder with no
-    // feedback. Surface an explicit control so the user can retry the play()
-    // call from a direct tap, which browsers always allow.
-    showPlayPrompt(promptMessage);
-    return false;
+  for (let attempt = 0; attempt < PLAY_RETRY_ATTEMPTS; attempt++) {
+    const isLastAttempt = attempt === PLAY_RETRY_ATTEMPTS - 1;
+    try {
+      await video.play();
+      if (await waitForVideoFrame(video, isLastAttempt ? 3500 : 400)) return true;
+    } catch (error) {
+      // fall through to retry below
+    }
+    if (!isLastAttempt) await sleep(150 * (attempt + 1));
   }
-
-  if (!(await waitForVideoFrame(video))) {
-    showPlayPrompt("Tap to retry camera");
-    return false;
-  }
-  $("#scanPlayBtn").hidden = true;
-  return true;
+  return false;
 }
 
 function showFallback(message) {
   $("#scanFallbackMsg").textContent = message || "Camera access was denied or is unavailable. You can still import photos from your gallery.";
   $("#scanFallback").classList.add("is-active");
-  $("#scanPlayBtn").hidden = true;
   $("#scanVideo").style.display = "none";
 }
 
@@ -264,14 +262,54 @@ async function handleShutter() {
   showReviewFrame(blob);
 }
 
+// #scanVideo is `object-fit: cover`, so the displayed video is scaled up and
+// cropped to fill its box — the guide frame's on-screen position doesn't map
+// 1:1 to native video pixels. This inverts that mapping so the captured photo
+// is exactly the card-sized rectangle the user saw on screen, not the whole
+// (wider) camera view.
+function computeGuideSourceRect(video) {
+  const guide = $("#scanGuideFrame");
+  const videoRect = video.getBoundingClientRect();
+  if (!guide || !videoRect.width || !videoRect.height || !video.videoWidth || !video.videoHeight) {
+    return null;
+  }
+  const guideRect = guide.getBoundingClientRect();
+  const scale = Math.max(videoRect.width / video.videoWidth, videoRect.height / video.videoHeight);
+  const offsetX = (video.videoWidth * scale - videoRect.width) / 2;
+  const offsetY = (video.videoHeight * scale - videoRect.height) / 2;
+
+  let sx = (guideRect.left - videoRect.left + offsetX) / scale;
+  let sy = (guideRect.top - videoRect.top + offsetY) / scale;
+  let sw = guideRect.width / scale;
+  let sh = guideRect.height / scale;
+
+  // Defensive clamp against rounding/layout edge cases — never read outside
+  // the actual video frame.
+  sx = Math.max(0, Math.min(sx, video.videoWidth - 1));
+  sy = Math.max(0, Math.min(sy, video.videoHeight - 1));
+  sw = Math.max(1, Math.min(sw, video.videoWidth - sx));
+  sh = Math.max(1, Math.min(sh, video.videoHeight - sy));
+  return { sx, sy, sw, sh };
+}
+
 function captureFrame() {
   return new Promise((resolve) => {
     const video = $("#scanVideo");
     if (!hasRenderableVideoFrame(video)) return resolve(null);
     const canvas = $("#scanCanvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const crop = computeGuideSourceRect(video);
+    const context = canvas.getContext("2d");
+    if (crop) {
+      canvas.width = Math.round(crop.sw);
+      canvas.height = Math.round(crop.sh);
+      context.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
+    } else {
+      // Guide frame not measurable (e.g. hidden layout) — fall back to the
+      // full frame rather than losing the capture.
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
     canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9);
   });
 }

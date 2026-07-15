@@ -181,20 +181,16 @@
           <video id="scanVideo" autoplay playsinline muted></video>
           <canvas id="scanCanvas" hidden></canvas>
           <div class="scan-guide-wrap">
-            <div class="scan-guide-frame"></div>
+            <div id="scanGuideFrame" class="scan-guide-frame"></div>
             <div class="scan-guide-caption">Align card inside the frame</div>
           </div>
-          <img id="scanFrozenFrame" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+          <img id="scanFrozenFrame" alt="">
 
           <div id="scanFallback">
             <svg class="icon" aria-hidden="true" style="width:40px;height:40px"><use href="#icon-camera"/></svg>
             <p id="scanFallbackMsg">Camera access was denied or is unavailable. You can still import photos from your gallery.</p>
             <button id="scanFallbackGalleryBtn" class="btn primary" type="button">Choose from gallery</button>
           </div>
-
-          <button id="scanPlayBtn" class="btn primary" type="button" hidden style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;">
-            Tap to start camera
-          </button>
 
           <div id="scanReviewSheet">
             <div class="review-actions">
