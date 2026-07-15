@@ -88,14 +88,31 @@ def export_records(records: list[BusinessCardRecord], output_path) -> "Path":
     return output
 
 
+# The sheet only ever displays this at a 140x84pt thumbnail (see image.width/
+# height below), so the embedded pixel data only needs to comfortably exceed
+# that on a high-DPI zoom — anything larger just bloats the .xlsx for no
+# visible benefit. 320px covers a ~2.3x retina-ish zoom of the display box.
+_CARD_THUMBNAIL_MAX_EDGE = 320
+_CARD_THUMBNAIL_QUALITY = 75
+
+
 def _add_card_image(ws, image_bytes: "bytes | None", row_index: int, column: str) -> None:
     if not image_bytes or column not in EXCEL_COLUMNS:
         return
     try:
-        # Normalize to PNG in memory so openpyxl embeds it reliably.
+        # Re-encode as a small JPEG rather than a lossless PNG: the source is
+        # already a compressed JPEG (see compress_for_storage), so decoding it
+        # and writing it back out as PNG would inflate a ~150-250KB file back
+        # up to 1-1.5MB for a thumbnail nobody views above 140x84pt.
         with PillowImage.open(BytesIO(image_bytes)) as source:
+            rgb = source.convert("RGB")
+            width, height = rgb.size
+            longest = max(width, height)
+            if longest > _CARD_THUMBNAIL_MAX_EDGE:
+                scale = _CARD_THUMBNAIL_MAX_EDGE / longest
+                rgb = rgb.resize((max(1, int(width * scale)), max(1, int(height * scale))))
             buffer = BytesIO()
-            source.convert("RGB").save(buffer, "PNG")
+            rgb.save(buffer, "JPEG", quality=_CARD_THUMBNAIL_QUALITY, optimize=True)
         buffer.seek(0)
         image = ExcelImage(buffer)
     except Exception:  # noqa: BLE001 — a bad image should not fail the whole export

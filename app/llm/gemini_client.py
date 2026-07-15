@@ -1,8 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import hashlib
+
+logger = logging.getLogger(__name__)
+
+
+def _is_config_error(message: str) -> bool:
+    """A 400 INVALID_ARGUMENT means the request itself is malformed (bad
+    response_schema, unsupported field, oversized payload) — a code bug that
+    will fail identically on every key and every card, NOT a transient quota
+    issue. It must be logged loudly: silently swallowing it degrades the whole
+    app to the regex fallback with no visible signal (exactly the
+    additionalProperties bug that produced garbage extractions)."""
+    return "400" in message and (
+        "INVALID_ARGUMENT" in message or "additional_properties" in message.lower()
+    )
 
 from app.config import BUSINESS_CATEGORIES, GEMINI_API_KEY, GEMINI_API_KEYS, GEMINI_MODEL
 from app.models import OCRSideResult
@@ -83,12 +98,28 @@ try:
 
     _CategoryEnum = Enum("BusinessCategory", {value: value for value in BUSINESS_CATEGORIES})
 
+    class FieldEvidenceItem(BaseModel):
+        """One (field, source-line) citation. Modeled as an explicit object
+        with fixed keys rather than a dict[str, str] because Gemini's
+        `response_schema` REJECTS any schema containing `additionalProperties`
+        (which an open-ended dict emits) with a 400 INVALID_ARGUMENT — that
+        error silently killed every image-structuring call and forced the
+        whole app onto the weak regex fallback. See _evidence_to_dict for the
+        conversion back to the dict shape the rest of the app stores."""
+
+        field: str | None = None
+        evidence: str | None = None
+
     class GeminiCardExtraction(BaseModel):
         """Response-only schema for the multimodal Gemini call. Deliberately
         excludes app-managed record fields (record_id/date/time/etc — see
         BusinessCardRecord in app/models.py) since the model must never
         produce those; category is a real enum so Gemini cannot return free
-        text like a job title instead of a taxonomy value."""
+        text like a job title instead of a taxonomy value.
+
+        IMPORTANT: every field type here must map to a Gemini-compatible JSON
+        schema — no bare `dict`/`Dict` fields (they emit `additionalProperties`,
+        which Gemini rejects). Use a nested BaseModel list instead."""
 
         front_text: str | None = None
         back_text: str | None = None
@@ -111,10 +142,36 @@ try:
         contact2: str | None = None
         contact3: str | None = None
         country_code: str | None = None
-        field_evidence: dict[str, str] | None = None
+        field_evidence: list[FieldEvidenceItem] | None = None
         uncertain_fields: list[str] | None = None
 except Exception:  # pragma: no cover - pydantic/enum always available in practice
     GeminiCardExtraction = None
+    FieldEvidenceItem = None
+
+
+def _evidence_to_dict(value) -> dict | None:
+    """Normalize field_evidence into the {field: evidence} dict the rest of
+    the app stores/displays. Gemini now returns it as a list of {field,
+    evidence} objects (the dict shape isn't expressible in its response
+    schema), but the deterministic extractor and older records still use a
+    plain dict — accept both."""
+    if not value:
+        return None
+    if isinstance(value, dict):
+        return {str(k): v for k, v in value.items() if k}
+    if isinstance(value, list):
+        out: dict[str, str] = {}
+        for item in value:
+            if isinstance(item, dict):
+                field = item.get("field")
+                evidence = item.get("evidence")
+            else:
+                field = getattr(item, "field", None)
+                evidence = getattr(item, "evidence", None)
+            if field:
+                out[str(field)] = evidence
+        return out or None
+    return None
 
 BUSINESS_CARD_VISUAL_RULES = """
 Business-card layout rules learned from local samples:
@@ -159,12 +216,16 @@ Step 1. List every distinct printed line on the front side (and back side only
 if the front has no company line at all).
 
 Step 2. Mark a line as a COMPANY candidate if ANY of the following is true:
-   - It contains a legal-entity suffix or prefix: PT, Pvt, Ltd, LLC, Inc, LLP,
-     Pte, Tbk, Sdn, Bhd, Co, Corp, Corporation, GmbH, S.A., S.p.A., B.V.
+   - It contains a legal-entity suffix or prefix: PT, CV, Pvt, Ltd, LLC, Inc,
+     LLP, Pte, Tbk, Sdn, Bhd, Co, Corp, Corporation, GmbH, S.A., S.p.A., B.V.,
+     N.V., FZE, FZC, FZCO, WLL, W.L.L., DMCC, PLC, PJSC, JSC, SARL, Pty, K.K.
    - It contains a generic business noun: Group, Engineering, Industrial,
      Industries, Services, Solutions, Technologies, Systems, Trading, Supply,
      Manufacturing, Marine, Contractors, Oil, Gas, Energy, Construction,
-     Logistics, Metal, Works, Radiator, Enterprises, Consultancy, Ventures.
+     Logistics, Metal, Works, Radiator, Enterprises, Consultancy, Ventures,
+     International, Global, Holdings, Traders, Exports, Imports, Impex,
+     Associates, Machinery, Equipment, Chemicals, Steel, Shipping, Freight,
+     Cargo, Valves, Pipes, Hardware.
    - It is the top-most stylized/logo text on the front side (brands are
      almost always at the very top, even a single stylized word like
      "PETROSEA" or "TOKKI").
@@ -185,9 +246,16 @@ true:
 
 Step 3b. Mark a line as a DESIGNATION candidate if it reads like a job role:
    - Director, Manager, Engineer, Officer, Executive, President, CEO, COO,
-     Founder, Consultant, Specialist, Coordinator, Supervisor, Analyst, Head,
-     Procurement, Sales, Marketing, Operations, Technical, Regional, Senior,
-     Junior, Assistant, Deputy, General Manager, Plant Manager, etc.
+     CFO, CTO, Chairman, Managing Director, Founder, Owner, Proprietor,
+     Partner, Principal, Consultant, Specialist, Coordinator, Supervisor,
+     Superintendent, Analyst, Head, Advisor, Architect, Technician, Surveyor,
+     Estimator, Secretary, Accountant, Auditor, Representative, In-charge,
+     Vice President, Procurement, Purchasing, Sales, Marketing, Operations,
+     Technical, Regional, Senior, Junior, Assistant, Deputy, General Manager,
+     Plant Manager, Business Development, etc.
+   - A designation may sit on the SAME line as the name ("John Doe, Sales
+     Manager"), on the line directly BELOW the name (most common), or the
+     line directly ABOVE it. It is usually printed smaller than the name.
    - A designation is NEVER a company name, NEVER a person name by itself.
    - If a line contains BOTH a person name and a designation separated by a
      comma, dash, or slash (e.g. "Ahmad Rizal, Sales Manager"), split it:
@@ -227,6 +295,55 @@ Step 5. Before finalizing, sanity-check both fields against each other:
 """.strip()
 
 
+# Zip/PIN extraction gets its own dedicated procedure for the same reason the
+# name-vs-company confusion does: the model's most common zip mistake is
+# copying a 5-6 digit chunk out of a phone/fax number, so the prompt walks
+# through address-first location and per-country format checks explicitly.
+ZIP_CODE_PROCEDURE = """
+Zip/PIN/postal code (zip_code) — follow this procedure in order every time,
+because the most common zip mistake is copying digits out of a phone number:
+
+Step 1. Locate the printed postal ADDRESS block first (street / area / city /
+   state / country lines). The postal code is ONLY ever part of that address.
+   If the card has no printed address, zip_code MUST be null.
+
+Step 2. Within the address, the postal code is a short code printed
+   immediately before or after the city/state/country, for example:
+   - "Navi Mumbai - 400703, Maharashtra, India" → zip_code = "400703"
+   - "Bekasi 17530, Jawa Barat, Indonesia" → zip_code = "17530"
+   - "Singapore 629733" → zip_code = "629733"
+   - "Houston, TX 77002" → zip_code = "77002"
+   It may also be labeled explicitly: PIN, PIN Code, Post Code, Postal Code,
+   ZIP. A labeled value always wins over a positional guess.
+
+Step 3. Check the value against the country's postal format before returning:
+   - India: exactly 6 digits (PIN, e.g. 400703, 110001).
+   - Indonesia, Malaysia, Thailand, Saudi Arabia, Turkey, Germany, France,
+     Pakistan, Sri Lanka, South Korea, Kuwait: exactly 5 digits.
+   - Singapore, China, Russia: exactly 6 digits.
+   - USA: 5 digits (ZIP+4 like "77002-1234" is fine as printed).
+   - Japan: 7 digits, usually written 123-4567.
+   - Australia, Philippines, New Zealand, South Africa, Bangladesh: 4 digits.
+   - United Kingdom: alphanumeric like "SW1A 1AA" — return exactly as printed.
+   - UAE, Qatar, Hong Kong: NO postal codes exist — zip_code MUST be null.
+     A number after "P.O. Box" is a post-office box number, NEVER a zip_code.
+   If the digit run you picked does not fit the country's format, it is NOT
+   the postal code — re-read the address block or return null.
+
+Step 4. NEVER take zip_code from a telephone, mobile, fax, or WhatsApp
+   number. Digit runs on lines labeled T / Tel / Telp / Phone / M / Mob / HP /
+   Cell / F / Fax / WA are telephone digits, not postal codes — even when a
+   5-6 digit chunk inside them happens to look like one (e.g. never return
+   "82364" from "+62 21 8236 4551"). Also never use: P.O. Box numbers,
+   registration or tax numbers (NPWP, GST, VAT, CIN, CR No.), certificate
+   numbers (ISO 9001:2015), street/house/plot numbers, suite numbers, or
+   years.
+
+Step 5. If after Steps 1-4 no code clearly qualifies, return zip_code = null
+   and add "zip_code" to uncertain_fields. Never guess.
+""".strip()
+
+
 THINK_BEFORE_CLASSIFY = """
 Before writing any JSON output, work through these reasoning steps internally:
 
@@ -245,19 +362,27 @@ REASONING STEP C — Identify the person name:
   → Name = <that line>, or null if none qualifies.
 
 REASONING STEP D — Identify the designation:
-  Is there a job-role line (Director / Manager / Engineer / Officer / etc.)?
+  Is there a job-role line (Director / Manager / Engineer / Officer / CEO / Founder / etc.)?
   Is it directly adjacent to the name candidate?
   → Designation = <that line>
   If a single line reads "Ahmad Rizal, Sales Manager", split it:
     Name = "Ahmad Rizal", Designation = "Sales Manager"
 
-REASONING STEP E — Final sanity check before output:
+REASONING STEP E — Identify the postal code:
+  Which line(s) form the address block? Is there a short digit code adjacent
+  to the city/state/country that matches that country's postal format
+  (India 6, Indonesia 5, Singapore 6, US 5, ...)?
+  → zip_code = <that code>, or null. NEVER a digit chunk from a line labeled
+    T/Tel/M/Mob/HP/F/Fax/WA, and never a P.O. Box number.
+
+REASONING STEP F — Final sanity check before output:
   1. Name ≠ Company (if they match, set name = null)
   2. Designation ≠ Name and Designation ≠ Company
-  3. Every field value must be a verbatim substring of the OCR text (except category/country)
-  4. If you are uncertain about name or designation, add that field to uncertain_fields
+  3. zip_code is from the address block and fits the country's format
+  4. Every field value must be a verbatim substring of the OCR text (except category/country)
+  5. If you are uncertain about a field, add that field to uncertain_fields
 
-Only after completing steps A–E, write the JSON output.
+Only after completing steps A–F, write the JSON output.
 """.strip()
 
 def _key_label(api_key: str | None, index: int | None = None) -> str | None:
@@ -358,7 +483,11 @@ def _clean_website(value: str | None, email: str | None = None) -> str | None:
 
 
 DESIGNATION_RE = re.compile(
-    r"\b(procurement|marketing|sales|director|manager|engineer|officer|executive|specialist|consultant|head|president)\b",
+    r"\b(procurement|purchasing|marketing|sales|director|manager|engineer|officer|executive|"
+    r"specialist|consultant|head|president|chairman|chairperson|founder|owner|proprietor|"
+    r"partner|principal|supervisor|superintendent|coordinator|administrator|analyst|"
+    r"advisor|adviser|architect|technician|surveyor|estimator|secretary|accountant|"
+    r"auditor|representative|in-?charge|ceo|coo|cfo|cto|cmo|cio|vp|vice\s+president)\b",
     re.I,
 )
 ADDRESS_RE = re.compile(
@@ -374,11 +503,17 @@ SERVICE_RE = re.compile(
     r"\b(design|fabrication|heavy duty|radiator|oil cooler|heat exchanger|shell|tube|pressure vessel|special order|engineering and fabrication)\b",
     re.I,
 )
-LEGAL_ENTITY_RE = re.compile(r"\b(pt|pvt|ltd|llc|inc|llp|pte|tbk|co\.?|corp|corporation|sdn|bhd)\b", re.I)
+LEGAL_ENTITY_RE = re.compile(
+    r"\b(pt|pvt|ltd|llc|inc|llp|pte|tbk|co\.?|corp|corporation|sdn|bhd|cv|fze|fzc|fzco|"
+    r"wll|w\.l\.l|dmcc|plc|gmbh|sarl|s\.a\.r\.l|pty|jsc|pjsc|nv|bv)\b",
+    re.I,
+)
 COMPANY_IDENTITY_RE = re.compile(
     r"\b(company|corporation|corp|group|industrial|industries|engineering|fabrication|solutions|"
-    r"technologies|systems|services|enterprise|trading|manufacturing|marine|contractors|"
-    r"supply|supplies|metal|works|radiator|oil|gas|energy|construction|logistics)\b",
+    r"technologies|systems|services|enterprise|enterprises|trading|manufacturing|marine|contractors|"
+    r"supply|supplies|metal|works|radiator|oil|gas|energy|construction|logistics|"
+    r"international|global|holdings|traders|exports|imports|impex|associates|machinery|"
+    r"equipment|chemicals|steel|shipping|freight|cargo|valves|pipes|hardware)\b",
     re.I,
 )
 FREE_EMAIL_DOMAINS = {
@@ -587,8 +722,134 @@ def _infer_zip(text: str) -> str | None:
             match = re.search(r"(?<!\d)\d{4,8}(?!\d)", line)
             if match:
                 return match.group(0)
-    matches = re.findall(r"\b\d{5,6}\b", text)
-    return matches[-1] if matches else None
+    # Fallback: standalone 5-6 digit runs, but never from a line that carries
+    # a phone/email/website value or a phone label — a spaced phone number
+    # ("+62 21 8236 4551") is full of zip-shaped digit chunks.
+    candidates: list[str] = []
+    for line in text.splitlines():
+        if _has_contact_value(line) or _PHONE_LINE_LABEL_RE.search(line):
+            continue
+        candidates.extend(re.findall(r"\b\d{5,6}\b", line))
+    return candidates[-1] if candidates else None
+
+
+# Phone-label context that disqualifies a line as a zip/postal-code source:
+# full label words, or a bare T/M/F letter immediately followed by ":"/".".
+_PHONE_LINE_LABEL_RE = re.compile(
+    r"\b(tel|telp|telephone|phone|ph|mob|mobile|hp|cell|fax|whatsapp|wa|direct|hotline|dial)\b"
+    r"|(?:^|[\s|,;(])[tmf]\s*[.:]",
+    re.I,
+)
+_ZIP_LABEL_RE = re.compile(r"\b(zip|postal\s*code|post\s*code|pin\s*code|pincode|pin)\b", re.I)
+_PO_BOX_RE = re.compile(r"\bp\.?\s*o\.?\s*box\b", re.I)
+_UK_POSTCODE_RE = re.compile(r"^[A-Za-z]{1,2}\d[A-Za-z\d]?\s*\d[A-Za-z]{2}$")
+
+# Postal-code digit counts by dial code. (0, 0) marks countries with no
+# public postal-code system (UAE/Qatar/Hong Kong) — any digits Gemini
+# returns for them are P.O. Box or phone fragments, never a zip.
+_ZIP_DIGIT_RULES: dict[str, tuple[int, int]] = {
+    "+1": (5, 5),    # USA/Canada (US ZIP)
+    "+7": (6, 6),    # Russia
+    "+27": (4, 4),   # South Africa
+    "+33": (5, 5),   # France
+    "+34": (5, 5),   # Spain
+    "+39": (5, 5),   # Italy
+    "+49": (5, 5),   # Germany
+    "+55": (8, 8),   # Brazil CEP
+    "+60": (5, 5),   # Malaysia
+    "+61": (4, 4),   # Australia
+    "+62": (5, 5),   # Indonesia
+    "+63": (4, 4),   # Philippines
+    "+64": (4, 4),   # New Zealand
+    "+65": (6, 6),   # Singapore
+    "+66": (5, 5),   # Thailand
+    "+81": (7, 7),   # Japan (123-4567)
+    "+82": (5, 5),   # South Korea
+    "+84": (5, 6),   # Vietnam
+    "+86": (6, 6),   # China
+    "+90": (5, 5),   # Turkey
+    "+91": (6, 6),   # India PIN
+    "+92": (5, 5),   # Pakistan
+    "+94": (5, 5),   # Sri Lanka
+    "+880": (4, 4),  # Bangladesh
+    "+965": (5, 5),  # Kuwait
+    "+966": (5, 5),  # Saudi Arabia
+    "+968": (3, 3),  # Oman
+    "+973": (3, 4),  # Bahrain
+    "+971": (0, 0),  # UAE — no postal codes
+    "+974": (0, 0),  # Qatar — no postal codes
+    "+852": (0, 0),  # Hong Kong — no postal codes
+}
+
+
+def _digit_run_around(line: str, start: int, end: int) -> str:
+    """Digits of the contiguous number-ish run (digits plus common phone
+    separators) surrounding line[start:end] — used to detect a 'zip' that is
+    really a chunk of a longer phone/fax number."""
+    allowed = set("0123456789 -.()/+")
+    left, right = start, end
+    while left > 0 and line[left - 1] in allowed:
+        left -= 1
+    while right < len(line) and line[right] in allowed:
+        right += 1
+    return re.sub(r"\D", "", line[left:right])
+
+
+def _zip_printed_in_address_context(digits: str, text: str) -> bool:
+    """True when the digit run appears somewhere in the transcript that reads
+    like a postal address (or at least NOT like a phone/fax/P.O. Box line)."""
+    pattern = re.compile(rf"(?<!\d){re.escape(digits)}(?!\d)")
+    for line in text.splitlines():
+        for match in pattern.finditer(line):
+            if _PHONE_LINE_LABEL_RE.search(line):
+                continue
+            prefix = line[max(0, match.start() - 12): match.start()]
+            if _PO_BOX_RE.search(prefix):
+                continue
+            # Embedded in a longer digit run (a spaced/hyphenated phone
+            # number)? Allow a little slack for ZIP+4 / Japanese 123-4567.
+            if len(_digit_run_around(line, match.start(), match.end())) > len(digits) + 4:
+                continue
+            lowered = line.lower()
+            has_place_word = any(hint in lowered for hint in _PLACE_BLOCKLIST if len(hint) > 3)
+            if (
+                ADDRESS_RE.search(line)
+                or _ZIP_LABEL_RE.search(line)
+                or has_place_word
+                or not PHONE_RE.search(line)
+            ):
+                return True
+    return False
+
+
+def _validate_zip_code(
+    value: str | None,
+    text: str,
+    country_code: str | None,
+    contact_numbers: list[str | None],
+) -> str | None:
+    """Accept a zip/PIN/postal code only when it fits the card's country
+    format AND is printed in address context — never a digit chunk copied out
+    of a phone/fax number or a P.O. Box."""
+    if not value:
+        return None
+    raw = str(value).strip().strip(".,;:")
+    if _UK_POSTCODE_RE.match(raw):
+        return raw.upper() if not text or _value_supported_by_text(raw, text) else None
+    if re.fullmatch(r"\d{5}-\d{4}", raw):  # US ZIP+4 → keep the 5-digit ZIP
+        raw = raw[:5]
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    low, high = _ZIP_DIGIT_RULES.get(country_code or "", (4, 8))
+    if low == 0 or not (low <= len(digits) <= high):
+        return None
+    if text:
+        if not _zip_printed_in_address_context(digits, text):
+            return None
+    elif any(number and digits in re.sub(r"\D", "", str(number)) for number in contact_numbers):
+        return None
+    return digits
 
 
 def _infer_city_state(text: str) -> tuple[str | None, str | None]:
@@ -968,6 +1229,64 @@ def _same_identity(left: str | None, right: str | None) -> bool:
     return bool(normalized_left and normalized_left == normalized_right)
 
 
+# "John Doe, Sales Manager" / "John Doe — Sales Manager" merged into one
+# value. The separator must be a comma or a SPACED dash/pipe/slash so that
+# hyphenated names ("Jean-Pierre") are never split.
+_NAME_TITLE_SPLIT_RE = re.compile(r"^(?P<name>.{2,}?)(?:\s*,\s*|\s+[|/–—-]\s+)(?P<title>.{2,})$")
+
+
+def _split_name_designation(cleaned: dict) -> None:
+    name = cleaned.get("name")
+    if not name:
+        return
+    match = _NAME_TITLE_SPLIT_RE.match(str(name).strip())
+    if not match:
+        return
+    name_part = match.group("name").strip()
+    title_part = match.group("title").strip()
+    # Only split when the tail reads like a job title and the head reads like
+    # a bare person name — "Ir. Bambang Suryanto, M.T." must stay intact.
+    if (
+        DESIGNATION_RE.search(title_part)
+        and not DESIGNATION_RE.search(name_part)
+        and _looks_like_person_name(name_part)
+    ):
+        cleaned["name"] = name_part
+        if not cleaned.get("designation"):
+            cleaned["designation"] = title_part
+
+
+def _repair_designation(cleaned: dict) -> None:
+    """Designation must be a job title. Drop it when it is really the name,
+    the company, a field label, an address/service line, or a brand."""
+    designation = cleaned.get("designation")
+    if not designation:
+        return
+    value = str(designation).strip()
+    if (
+        _same_identity(designation, cleaned.get("name"))
+        or _same_identity(designation, cleaned.get("business"))
+        or _same_identity(designation, cleaned.get("company"))
+        or _has_contact_value(value)
+        or _is_field_label(value)
+        or _is_place_name(value)
+        or len(value.split()) > _MAX_DESIGNATION_WORDS
+    ):
+        cleaned["designation"] = None
+        return
+    # A recognised role keyword ("Design Engineer", "Marketing") is kept even
+    # when a service/address word also appears in it.
+    if DESIGNATION_RE.search(value):
+        return
+    if (
+        ADDRESS_RE.search(value)
+        or SERVICE_RE.search(value)
+        or LEGAL_ENTITY_RE.search(value)
+        or _looks_like_company_identity(value)
+    ):
+        cleaned["designation"] = None
+
+
 def _repair_name_company_conflict(cleaned: dict, visible_text: str) -> None:
     name = cleaned.get("name")
     business = cleaned.get("business")
@@ -998,6 +1317,10 @@ def _repair_name_company_conflict(cleaned: dict, visible_text: str) -> None:
 
 def clean_structured_fields(fields: dict) -> dict:
     cleaned = {field: fields.get(field) for field in FIELDS}
+    # Gemini now returns field_evidence as a list of {field, evidence} objects
+    # (a dict isn't expressible in its response schema); collapse back to the
+    # {field: evidence} dict the app stores and displays.
+    cleaned["field_evidence"] = _evidence_to_dict(cleaned.get("field_evidence"))
     visible_text = _visible_text(cleaned)
     if not cleaned.get("all_visible_text"):
         cleaned["all_visible_text"] = visible_text or None
@@ -1049,6 +1372,11 @@ def clean_structured_fields(fields: dict) -> dict:
         cleaned["contact2"] = None
     if cleaned.get("contact3") in {cleaned.get("contact1"), cleaned.get("contact2")}:
         cleaned["contact3"] = None
+    contact_values = [cleaned.get("contact1"), cleaned.get("contact2"), cleaned.get("contact3")]
+    cleaned["zip_code"] = (
+        _validate_zip_code(cleaned.get("zip_code"), visible_text, cleaned.get("country_code"), contact_values)
+        or _validate_zip_code(_infer_zip(visible_text), visible_text, cleaned.get("country_code"), contact_values)
+    )
     normalized_phone = normalize_phone(cleaned.get("phone_number"), cleaned.get("country_code"))
     normalized_mobile = normalize_phone(cleaned.get("mobile_number"), cleaned.get("country_code"))
     normalized_fax = normalize_phone(cleaned.get("fax_number"), cleaned.get("country_code"))
@@ -1060,8 +1388,10 @@ def clean_structured_fields(fields: dict) -> dict:
     ) or normalize_phone(cleaned.get("phone_primary"), cleaned.get("country_code")) or normalized_mobile or normalized_phone
     if not cleaned.get("company"):
         cleaned["company"] = cleaned.get("business")
+    _split_name_designation(cleaned)
     _drop_unsupported_fields(cleaned, visible_text)
     _repair_name_company_conflict(cleaned, visible_text)
+    _repair_designation(cleaned)
     if cleaned.get("business") and not cleaned.get("company"):
         cleaned["company"] = cleaned["business"]
     if cleaned.get("company") and not cleaned.get("business"):
@@ -1111,31 +1441,29 @@ Rule-based candidate hints:
     prompt = f"""
 Look at the attached business card image(s) and extract structured contact fields
 matching the response schema. Transcribe the printed text you can see, then sort
-it into the schema's fields. Use the image as the source of truth for layout
+it into the schema's fields following your field procedures (name vs. company,
+designation, zip_code). Use the image as the source of truth for layout
 (which line is the logo/brand, which line is a person's name, relative text size
 and position); use the OCR grounding text below only to fill in exact wording and
 catch what OCR read correctly.
 
-Rules:
-{BUSINESS_CARD_VISUAL_RULES}
+Task-specific rules:
 - Use only values visible on the card image. Do not invent missing values; prefer null over a guessed value.
 - Every non-null field except category/country_code must be supported by a line in front_text/back_text.
 - Never use service bullet text, marketing slogans, product names, or "Business Outline" headings as a person name or business name.
 - front_text/back_text must contain the full transcription of that side, lines separated by "\\n"; back_text is null if no back image was provided.
 - all_visible_text must combine front_text and back_text.
-- field_evidence must be an object whose keys are field names and whose values are the exact transcript line(s) used for that field.
+- field_evidence must be an array of objects, each {{"field": "<field name>", "evidence": "<exact transcript line(s) used for that field>"}}, one entry per non-null field you filled.
 - uncertain_fields must be an array of field names you are not confident about.
 - Contact1 is main direct/mobile, Contact2 is office/telephone, Contact3 is fax or another printed number — all digits only, with country calling code when visible or inferable.
 - Country must be the full country name, not an ISO code (e.g. Indonesia, not ID).
 - Category must be the single closest match to the company's business; never copy a job title or address into category.
-
-{NAME_VS_COMPANY_PROCEDURE}
+- zip_code must come from the address block per your zip procedure — never from a phone/fax number or P.O. Box.
 {grounding_section}
-{FEW_SHOT_EXAMPLE}
 """.strip()
 
     snapshot = usage_snapshot()
-    prompt_tokens = estimate_tokens(prompt)
+    prompt_tokens = estimate_tokens(GEMINI_SYSTEM_INSTRUCTION + "\n" + prompt)
     if not snapshot.allowed or snapshot.daily_tokens + prompt_tokens > snapshot.daily_token_limit:
         record_usage(
             event_id,
@@ -1162,12 +1490,17 @@ Rules:
     generation_config = (
         types.GenerateContentConfig(
             temperature=0,
+            system_instruction=GEMINI_SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
             response_schema=GeminiCardExtraction,
         )
         if types is not None and GeminiCardExtraction is not None
         else (
-            types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
+            types.GenerateContentConfig(
+                temperature=0,
+                system_instruction=GEMINI_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+            )
             if types is not None
             else None
         )
@@ -1227,6 +1560,13 @@ Rules:
                 if "429" in message or "RESOURCE_EXHAUSTED" in message:
                     _exhausted_key_labels.add(key_label)
                 else:
+                    if _is_config_error(message):
+                        logger.error(
+                            "Gemini image structuring rejected the request (config/schema bug, "
+                            "NOT a quota issue) — every card will silently fall back to the regex "
+                            "extractor until this is fixed: %s",
+                            message[:400],
+                        )
                     break
         if last_error:
             raise last_error
@@ -1283,6 +1623,58 @@ Annotated OCR lines:
 Correct extraction: name="Priya Sharma", designation="Independent Consultant", business=null.
 There is no legal-entity line or business noun anywhere on the card, so business must be null —
 never promote the name or a generic title into the business/company field just to fill it in.
+
+Example — the postal code comes from the address block, never from a phone number:
+Annotated OCR lines:
+[front L0 | top | large] PT. SARANA TEKNIK MANDIRI
+[front L1 | middle | large] Dewi Lestari
+[front L2 | middle | normal] Sales Engineer
+[front L3 | bottom | normal] Jl. Raya Narogong Km 12, Bantargebang, Bekasi 17310, Indonesia
+[front L4 | bottom | normal] T: +62 21 8236 4551  F: +62 21 8236 4552
+Correct extraction: zip_code="17310" — the 5-digit code printed after the city inside the
+address line (Indonesia uses 5-digit postal codes).
+Wrong extraction: zip_code="82364" or "4551" (digit chunks inside the phone/fax numbers are
+never postal codes, even when they are 5 digits long).
+
+Negative example — P.O. Box numbers and no-postal-code countries:
+Annotated OCR lines:
+[front L0 | top | large] GULF MARINE SERVICES FZE
+[front L1 | middle | large] Ahmed Al Mansoori
+[front L2 | middle | normal] Operations Manager
+[front L3 | bottom | normal] P.O. Box 61242, Jebel Ali Free Zone, Dubai, UAE
+Correct extraction: zip_code=null. The UAE has no postal codes; "61242" is a P.O. Box
+number, which is part of the address text but never a zip_code.
+""".strip()
+
+
+# Everything Gemini must know about HOW to classify — persona, layout rules,
+# per-field procedures, internal reasoning steps, and worked examples — is
+# packed into a single system instruction shared by the image and text paths.
+# The per-call user prompt then only carries the task statement and the
+# card-specific data (image/OCR transcript/hints), which keeps the rules in
+# the highest-authority slot of the request instead of buried mid-prompt.
+GEMINI_SYSTEM_INSTRUCTION = f"""
+You are a meticulous business-card data-entry specialist. Your only job is to
+transcribe business cards and sort the printed text into structured contact
+fields without ever putting a value into the wrong field. You follow the
+procedures below exactly, every time, for every card. When a field is not
+clearly printed on the card you return null instead of guessing — a null is
+always better than a wrong value, because a wrong value silently corrupts a
+CRM record while a null gets reviewed by a human.
+
+The four fields that are most often confused are: name (the PERSON), business/
+company (the ORGANIZATION), designation (the JOB TITLE), and zip_code (the
+POSTAL CODE). Each has a dedicated procedure below. Never skip them.
+
+{BUSINESS_CARD_VISUAL_RULES}
+
+{NAME_VS_COMPANY_PROCEDURE}
+
+{ZIP_CODE_PROCEDURE}
+
+{THINK_BEFORE_CLASSIFY}
+
+{FEW_SHOT_EXAMPLE}
 """.strip()
 
 
@@ -1327,19 +1719,19 @@ def structure_card_text(
         else ""
     )
     prompt = f"""
-You are sorting OCR text from a two-sided business card into Excel contact fields.
+Sort the OCR text below from a two-sided business card into Excel contact fields,
+following your field procedures (name vs. company, designation, zip_code).
 
 Return only valid JSON with these keys:
 {", ".join(FIELDS)}
 
-Rules:
-{BUSINESS_CARD_VISUAL_RULES}
+Task-specific rules:
 - The OCR text below is the only source of truth. Do not use outside knowledge.
 - Do not invent missing values. Prefer null over a guessed value.
 - Every non-null field except category/country_code must be supported by an exact OCR line.
 - Preserve front_text and back_text exactly as supplied.
 - Set all_visible_text to the combined OCR text.
-- field_evidence must cite the exact OCR line(s) used for each non-null field.
+- field_evidence must be an array of objects, each {{"field": "<field name>", "evidence": "<exact OCR line(s) used>"}}, citing the source line for each non-null field.
 - uncertain_fields must list fields where OCR is ambiguous or incomplete.
 - Email fields must contain @.
 - Website must be a printed website/domain value, not just the domain part of an email unless separately printed.
@@ -1352,11 +1744,9 @@ Rules:
 - Name is a PERSON's name, distinct from the business/company line, even when both appear near the top. A line tagged "large" near the top-middle or middle of the card that reads like a person's name (not a legal entity, not containing Pte/Ltd/PT/Inc/Co) is very likely the name. Do not put the company name into the name field, and do not put a person's name into business/company.
 - A candidate is NOT a person name if it is the same text as Business/company, is a single all-caps brand/acronym, contains legal suffixes (PT/Pvt/Ltd/LLC/Inc/Pte/Tbk/Co), or contains business nouns such as Engineering, Industrial, Services, Trading, Metal, Works, Radiator, Marine, Oil, Gas, Group, Corporation. Put those lines in Business/company or return name=null.
 - If no separate personal-name line is visible near a designation, return name=null. Never copy Business/company into name just to fill the field.
-- Zip_code is ONLY the postal/PIN code printed as part of the address block (a short 4-8 digit code, e.g. a 6-digit Indian PIN or a 5-digit US ZIP). Never take a zip_code value from inside a phone number, mobile number, or fax number — those are longer digit runs typically preceded by phone labels (T/Tel/M/Mob/F/Fax) or a country code, and are not postal codes.
+- zip_code must come from the address block per your zip procedure — never from a phone/mobile/fax number or P.O. Box.
 - Category must be exactly one of:
 {", ".join(BUSINESS_CATEGORIES)}
-
-{NAME_VS_COMPANY_PROCEDURE}
 {annotated_section}
 OCR front:
 {front_text or ""}
@@ -1366,12 +1756,10 @@ OCR back:
 
 Rule-based candidate hints:
 {json.dumps(candidate_hints or [], ensure_ascii=False, indent=2)}
-
-{FEW_SHOT_EXAMPLE}
 """.strip()
 
     snapshot = usage_snapshot()
-    prompt_tokens = estimate_tokens(prompt)
+    prompt_tokens = estimate_tokens(GEMINI_SYSTEM_INSTRUCTION + "\n" + prompt)
     if not snapshot.allowed or snapshot.daily_tokens + prompt_tokens > snapshot.daily_token_limit:
         record_usage(
             event_id,
@@ -1395,7 +1783,11 @@ Rule-based candidate hints:
         return {}
 
     generation_config = (
-        types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
+        types.GenerateContentConfig(
+            temperature=0,
+            system_instruction=GEMINI_SYSTEM_INSTRUCTION,
+            response_mime_type="application/json",
+        )
         if types is not None
         else None
     )
@@ -1464,9 +1856,16 @@ Rule-based candidate hints:
                 if "429" in message or "RESOURCE_EXHAUSTED" in message:
                     _exhausted_key_labels.add(key_label)
                 else:
+                    if _is_config_error(message):
+                        logger.error(
+                            "Gemini text structuring rejected the request (config/schema bug, "
+                            "NOT a quota issue) — every card will silently fall back to the regex "
+                            "extractor until this is fixed: %s",
+                            message[:400],
+                        )
                     break
         if last_error:
             raise last_error
         return {}
-    except Exception as exc:
+    except Exception:
         return {}

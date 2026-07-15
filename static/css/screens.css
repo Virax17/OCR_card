@@ -230,32 +230,6 @@
   color: var(--teal);
 }
 
-/* Scan sits flush in the row like Home/Records/More (no more floating,
-   overlapping circle) — same baseline as the other three, just with a
-   circular teal badge behind its icon so it still reads as the primary
-   action, matching how the desktop app-bar nav-link treats it as one of
-   an equal row rather than a raised overlay. */
-#navScanFab .nav-fab-circle {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: var(--teal);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: manipulation;
-}
-
-#navScanFab:active .nav-fab-circle {
-  transform: scale(.92);
-}
-
-#navScanFab .icon {
-  width: 18px;
-  height: 18px;
-}
-
 body.scan-open #bottomNav {
   display: none;
 }

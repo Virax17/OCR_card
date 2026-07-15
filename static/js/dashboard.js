@@ -20,15 +20,10 @@ export function renderDashboard() {
 }
 
 export function wireDashboard() {
-  // Hide scan button on mobile — Scan FAB in bottom nav is sufficient
+  // "Scan a card" + "Upload photos instead" show on every breakpoint —
+  // mobile matches desktop exactly instead of routing Scan through a
+  // separate bottom-nav icon.
   const scanBtn = $("#dashScanBtn");
-  const updateScanButtonVisibility = () => {
-    const isMobile = window.matchMedia("(max-width: 1023px)").matches;
-    scanBtn.style.display = isMobile ? "none" : "flex";
-  };
-  updateScanButtonVisibility();
-  window.addEventListener("resize", updateScanButtonVisibility);
-
   scanBtn.addEventListener("click", async () => {
     const { openScanScreen } = await import("./scan.js");
     openScanScreen();
@@ -155,7 +150,6 @@ function renderProcessingPill(state) {
     if (stopBtn) stopBtn.hidden = true;
   }
 }
-
 
 function renderUsage(state) {
   const el = $("#usageMeters");

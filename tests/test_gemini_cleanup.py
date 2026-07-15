@@ -386,3 +386,218 @@ def test_deterministic_fallback_finds_legal_entity_past_wrapped_address() -> Non
 
     assert fields["business"] == "PT. Mechatronic Transtec Indonesia"
     assert fields["name"] == "Sahat Siahaan"
+
+def test_zip_code_copied_from_phone_number_is_rejected() -> None:
+    # Regression: Gemini sometimes returns a 5-digit chunk of a phone/fax
+    # number as the zip. The transcript has no address, so zip must be null.
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "PT. SARANA TEKNIK",
+                    "Dewi Lestari",
+                    "Sales Engineer",
+                    "T: +62 21 8236 4551",
+                    "F: +62 21 8236 4552",
+                ]
+            ),
+            "name": "Dewi Lestari",
+            "business": "PT. SARANA TEKNIK",
+            "zip_code": "82364",
+            "contact2": "+62 21 8236 4551",
+        }
+    )
+
+    assert fields["zip_code"] is None
+
+
+def test_zip_code_from_address_line_is_kept() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "PT. SARANA TEKNIK",
+                    "Dewi Lestari",
+                    "Sales Engineer",
+                    "Jl. Raya Narogong Km 12, Bekasi 17310, Indonesia",
+                    "T: +62 21 8236 4551",
+                ]
+            ),
+            "name": "Dewi Lestari",
+            "business": "PT. SARANA TEKNIK",
+            "zip_code": "17310",
+            "contact2": "+62 21 8236 4551",
+        }
+    )
+
+    assert fields["zip_code"] == "17310"
+
+
+def test_zip_code_wrong_length_for_country_is_rejected() -> None:
+    # India (+91) PIN codes are exactly 6 digits — a 5-digit run cannot be
+    # an Indian postal code even when it sits on an address-looking line.
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "ACME ENGINEERING PVT LTD",
+                    "Rakesh Patel",
+                    "Director",
+                    "Plot No. 12345, MIDC Road, Navi Mumbai, India",
+                    "M: +91 98765 43210",
+                ]
+            ),
+            "name": "Rakesh Patel",
+            "business": "ACME ENGINEERING PVT LTD",
+            "zip_code": "12345",
+            "contact1": "+91 98765 43210",
+        }
+    )
+
+    assert fields["zip_code"] is None
+
+
+def test_po_box_number_is_not_a_zip_code() -> None:
+    # UAE has no postal codes; the P.O. Box number must never fill zip_code.
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "GULF MARINE SERVICES FZE",
+                    "Ahmed Al Mansoori",
+                    "Operations Manager",
+                    "P.O. Box 61242, Jebel Ali Free Zone, Dubai, UAE",
+                    "T: +971 4 883 5555",
+                ]
+            ),
+            "name": "Ahmed Al Mansoori",
+            "business": "GULF MARINE SERVICES FZE",
+            "zip_code": "61242",
+            "contact2": "+971 4 883 5555",
+        }
+    )
+
+    assert fields["zip_code"] is None
+
+
+def test_merged_name_and_title_are_split() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "Babcock & Wilcox",
+                    "John Doe, Regional Manager",
+                    "T: +91 22 4126 6030",
+                ]
+            ),
+            "name": "John Doe, Regional Manager",
+            "business": "Babcock & Wilcox",
+        }
+    )
+
+    assert fields["name"] == "John Doe"
+    assert fields["designation"] == "Regional Manager"
+
+
+def test_hyphenated_name_is_not_split() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "ACME GROUP",
+                    "Jean-Pierre Dubois",
+                    "Sales Director",
+                ]
+            ),
+            "name": "Jean-Pierre Dubois",
+            "designation": "Sales Director",
+            "business": "ACME GROUP",
+        }
+    )
+
+    assert fields["name"] == "Jean-Pierre Dubois"
+    assert fields["designation"] == "Sales Director"
+
+
+def test_company_text_in_designation_is_dropped() -> None:
+    # Gemini occasionally copies the brand or a service tagline into
+    # designation — both must be nulled, not left to corrupt the record.
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "TOKKI",
+                    "FITRI ALFIANA",
+                    "Procurement Officer",
+                ]
+            ),
+            "name": "FITRI ALFIANA",
+            "business": "TOKKI",
+            "designation": "TOKKI",
+        }
+    )
+
+    assert fields["designation"] is None
+    assert fields["business"] == "TOKKI"
+    assert fields["name"] == "FITRI ALFIANA"
+
+
+def test_ceo_and_founder_designations_are_kept() -> None:
+    fields = clean_structured_fields(
+        {
+            "front_text": "\n".join(
+                [
+                    "NUSANTARA TECH",
+                    "Andi Wijaya",
+                    "Founder & CEO",
+                ]
+            ),
+            "name": "Andi Wijaya",
+            "business": "NUSANTARA TECH",
+            "designation": "Founder & CEO",
+        }
+    )
+
+    assert fields["designation"] == "Founder & CEO"
+
+def test_gemini_response_schema_has_no_additional_properties() -> None:
+    # Regression: a dict[str, str] field emits `additionalProperties` in the
+    # JSON schema, which Gemini's response_schema REJECTS with a 400
+    # INVALID_ARGUMENT. That error silently forced every card onto the weak
+    # regex fallback. The response schema must stay free of it forever.
+    from app.llm.gemini_client import GeminiCardExtraction
+
+    schema = GeminiCardExtraction.model_json_schema()
+    hits = []
+
+    def walk(node, path="root"):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "additionalProperties":
+                    hits.append(path)
+                walk(value, f"{path}.{key}")
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                walk(item, f"{path}[{i}]")
+
+    walk(schema)
+    assert not hits, f"response schema must not contain additionalProperties: {hits}"
+
+
+def test_field_evidence_list_shape_is_normalized_to_dict() -> None:
+    # Gemini returns field_evidence as a list of {field, evidence} objects;
+    # the app stores it as a {field: evidence} dict.
+    fields = clean_structured_fields(
+        {
+            "front_text": "ACME LTD\nJohn Doe\nSales Manager",
+            "name": "John Doe",
+            "business": "ACME LTD",
+            "designation": "Sales Manager",
+            "field_evidence": [
+                {"field": "name", "evidence": "John Doe"},
+                {"field": "business", "evidence": "ACME LTD"},
+            ],
+        }
+    )
+
+    assert fields["field_evidence"] == {"name": "John Doe", "business": "ACME LTD"}
