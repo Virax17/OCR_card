@@ -7,6 +7,54 @@ const $ = (selector) => document.querySelector(selector);
 let deferredInstallPrompt = null;
 
 export function wireMoreScreen() {
+  // Account section
+  const changePasswordBtn = $("#changePasswordBtn");
+  if (changePasswordBtn) {
+    changePasswordBtn.addEventListener("click", () => {
+      const sheet = $("#changePasswordSheet");
+      if (sheet) sheet.showModal?.();
+    });
+  }
+
+  const moreResetBtn = $("#moreResetBtn");
+  if (moreResetBtn) {
+    moreResetBtn.addEventListener("click", async () => {
+      const { state, showToast } = await import("./app-shell.js");
+      if (!state.eventId) return showToast("Select an event first.", "error");
+      if (!confirm("Reset all card data for this event? This cannot be undone.")) return;
+      try {
+        await api.resetCards(state.eventId);
+        showToast("Event data reset.", "success");
+        state.records = [];
+        const { handleRouteChange } = await import("./app-shell.js");
+        handleRouteChange();
+      } catch (err) {
+        showToast("Reset failed: " + err.message, "error");
+      }
+    });
+  }
+
+  // Delete event button
+  const deleteBtn = document.getElementById("appBarDeleteBtn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      const { state, showToast } = await import("./app-shell.js");
+      if (!state.eventId) return showToast("Select an event first.", "error");
+      if (!confirm("Delete this event permanently? This cannot be undone.")) return;
+      try {
+        await api.deleteEvent(state.eventId);
+        showToast("Event deleted.", "success");
+        state.events = state.events.filter((e) => e.event_id !== state.eventId);
+        state.eventId = state.events[0]?.event_id || null;
+        const { loadEvents, handleRouteChange } = await import("./app-shell.js");
+        await loadEvents();
+        handleRouteChange();
+      } catch (err) {
+        showToast("Delete failed: " + err.message, "error");
+      }
+    });
+  }
+
   $("#moreExportBtn").addEventListener("click", async () => {
     const { state, showToast } = await import("./app-shell.js");
     if (!state.eventId) return showToast("Select an event first.", "error");
@@ -34,8 +82,16 @@ export function wireMoreScreen() {
 }
 
 export async function refreshMoreScreen(state) {
+  renderAccount(state);
   renderUsage(state);
   await renderHealth(state);
+}
+
+function renderAccount(state) {
+  const el = $("#accountEmail");
+  if (el && state.user) {
+    el.textContent = `Signed in as ${state.user.email}`;
+  }
 }
 
 function renderUsage(state) {

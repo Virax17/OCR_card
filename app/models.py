@@ -93,6 +93,10 @@ class BusinessCardRecord(BaseModel):
     front_image_filename: str | None = None
     back_image_filename: str | None = None
     reviewed_by_user: bool = False
+    # Email of the user who scanned this card. None on records created before
+    # per-user tracking existed; deliberately excluded from update_record's
+    # PATCH allow-list so it can't be rewritten after creation.
+    scanned_by: str | None = None
 
 
 class ProcessingResult(BaseModel):

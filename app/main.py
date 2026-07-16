@@ -6,7 +6,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -35,6 +35,9 @@ from app.models import BusinessCardRecord, EventIn, EventOut, ProcessingResult, 
 from app.storage import mongo, mongo_usage
 from app.ocr.google_vision import extract_text_combined as google_vision_extract_combined
 from app.ocr.google_vision import is_google_vision_configured
+from app.auth import require_admin, require_user
+from app.auth_routes import router as auth_router
+from app.storage.users import seed_admin
 from app.storage.db import new_id, utc_now
 from app.storage.excel_writer import build_workbook_bytes
 from app.storage.repositories import (
@@ -49,6 +52,7 @@ from app.storage.repositories import (
     insert_card_side,
     list_events,
     list_records,
+    log_scan,
     reset_event_data,
     save_audit,
     update_record,
@@ -58,6 +62,7 @@ from app.storage.repositories import (
 IMAGES_BUCKET_FIELD = "images"
 
 app = FastAPI(title="LLM Business Card Scanner")
+app.include_router(auth_router)
 
 STATIC_DIR = Path("static")
 if STATIC_DIR.exists():
@@ -118,6 +123,7 @@ def _seed_mongo_on_startup() -> None:
     try:
         ensure_indexes()
         ensure_event(DEFAULT_EVENT_ID, DEFAULT_EVENT_NAME, DEFAULT_EVENT_DATE, "Local")
+        seed_admin()
     except Exception:  # noqa: BLE001
         pass
 
@@ -182,7 +188,7 @@ async def health() -> dict:
 
 
 @app.get("/events", response_model=list[EventOut])
-async def api_list_events() -> list[EventOut]:
+async def api_list_events(user: dict = Depends(require_user)) -> list[EventOut]:
     return list_events()
 
 
@@ -192,7 +198,7 @@ def slugify(value: str) -> str:
 
 
 @app.post("/events", response_model=EventOut)
-async def api_create_event(payload: EventIn) -> EventOut:
+async def api_create_event(payload: EventIn, user: dict = Depends(require_user)) -> EventOut:
     event_id = slugify(f"{payload.name}_{payload.date}")
     ensure_event(event_id, payload.name, payload.date, payload.location)
     event = get_event(event_id)
@@ -202,7 +208,7 @@ async def api_create_event(payload: EventIn) -> EventOut:
 
 
 @app.delete("/events/{event_id}")
-async def api_delete_event(event_id: str) -> dict:
+async def api_delete_event(event_id: str, admin: dict = Depends(require_admin)) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
     database_counts = delete_event_data(event_id)
@@ -391,7 +397,7 @@ def record_from_llm_fields(
     )
 
 
-def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, back_upload: UploadFile | None, back_bytes: bytes | None) -> ProcessingResult:
+def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, back_upload: UploadFile | None, back_bytes: bytes | None, scanned_by: str | None = None) -> ProcessingResult:
     event = get_event(event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -504,8 +510,11 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
                 draft.low_confidence_fields = [*draft.low_confidence_fields, "llm_unavailable"]
             if draft.confidence_score == "High":
                 draft.confidence_score = "Medium"
+        draft.scanned_by = scanned_by
+        status = "needs_review" if draft.confidence_score == "Low" else "processed"
         upsert_card_record(draft)
-        return ProcessingResult(card=draft, status="needs_review" if draft.confidence_score == "Low" else "processed")
+        log_scan(event_id, event.name, card_id, scanned_by, status)
+        return ProcessingResult(card=draft, status=status)
     except Exception as exc:
         fallback = record_from_llm_fields(
             event_id=event_id,
@@ -517,7 +526,9 @@ def process_card(event_id: str, front_upload: UploadFile, front_bytes: bytes, ba
         )
         fallback.low_confidence_fields = ["all"]
         fallback.confidence_score = "Low"
+        fallback.scanned_by = scanned_by
         upsert_card_record(fallback)
+        log_scan(event_id, event.name, card_id, scanned_by, "error")
         return ProcessingResult(card=fallback, status="error", error_message=str(exc))
 
 
@@ -526,6 +537,7 @@ async def upload_card(
     event_id: str,
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
+    user: dict = Depends(require_user),
 ) -> ProcessingResult:
     front_bytes = await read_upload(front)
     back_bytes = await read_upload(back)
@@ -533,7 +545,7 @@ async def upload_card(
         raise HTTPException(status_code=400, detail="Front image is required")
     # Front+back are OCR'd as one stitched image, so a card is always 1 Vision unit.
     enforce_usage_limits({"google_vision": 1, "gemini": 1})
-    return process_card(event_id, front, front_bytes, back, back_bytes)
+    return process_card(event_id, front, front_bytes, back, back_bytes, scanned_by=user["email"])
 
 
 @app.post("/events/{event_id}/vision-scan")
@@ -541,6 +553,7 @@ async def vision_scan(
     event_id: str,
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
+    user: dict = Depends(require_user),
 ) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
@@ -566,6 +579,7 @@ async def ocr_scan(
     event_id: str,
     front: UploadFile = File(...),
     back: UploadFile | None = File(default=None),
+    user: dict = Depends(require_user),
 ) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
@@ -589,12 +603,12 @@ async def ocr_scan(
 
 
 @app.get("/events/{event_id}/cards")
-async def records(event_id: str) -> dict:
+async def records(event_id: str, user: dict = Depends(require_user)) -> dict:
     return {"event_id": event_id, "records": list_records(event_id)}
 
 
 @app.delete("/events/{event_id}/cards")
-async def reset_cards(event_id: str) -> dict:
+async def reset_cards(event_id: str, admin: dict = Depends(require_admin)) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
     database_counts = reset_event_data(event_id)
@@ -651,19 +665,19 @@ def usage_response() -> dict:
 
 
 @app.get("/llm-usage")
-async def global_llm_usage() -> dict:
+async def global_llm_usage(user: dict = Depends(require_user)) -> dict:
     return usage_response()
 
 
 @app.get("/events/{event_id}/llm-usage")
-async def llm_usage(event_id: str) -> dict:
+async def llm_usage(event_id: str, user: dict = Depends(require_user)) -> dict:
     if not get_event(event_id):
         raise HTTPException(status_code=404, detail="Event not found")
     return {**usage_response(), "event_id": event_id}
 
 
 @app.patch("/events/{event_id}/cards/{card_id}")
-async def patch_record(event_id: str, card_id: str, payload: UpdateRecordIn) -> dict:
+async def patch_record(event_id: str, card_id: str, payload: UpdateRecordIn, user: dict = Depends(require_user)) -> dict:
     values = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     try:
         return {"record": update_record(event_id, card_id, values)}
@@ -672,7 +686,7 @@ async def patch_record(event_id: str, card_id: str, payload: UpdateRecordIn) -> 
 
 
 @app.get("/events/{event_id}/download")
-async def download_excel(event_id: str) -> StreamingResponse:
+async def download_excel(event_id: str, user: dict = Depends(require_user)) -> StreamingResponse:
     records_for_event = list_records(event_id)
     # Images come from GridFS (no local files); the workbook is built in memory
     # and streamed straight back — nothing is written to disk.
@@ -688,7 +702,7 @@ async def download_excel(event_id: str) -> StreamingResponse:
 
 
 @app.get("/events/{event_id}/images/{filename}")
-async def get_image(event_id: str, filename: str) -> Response:
+async def get_image(event_id: str, filename: str, user: dict = Depends(require_user)) -> Response:
     image = _read_gridfs_image(filename)
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")

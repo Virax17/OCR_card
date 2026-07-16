@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -109,6 +113,47 @@ MONGO_GEMINI_DAILY_LIMIT = int(os.getenv("MONGO_GEMINI_DAILY_LIMIT", "120"))
 # How long a usage bucket document lives before Mongo auto-deletes it (TTL).
 # Comfortably longer than a month so the current bucket is never expired early.
 MONGO_USAGE_TTL_DAYS = int(os.getenv("MONGO_USAGE_TTL_DAYS", "40"))
+
+# --- Authentication / admin portal -----------------------------------------
+# Render always sets the RENDER env var, so we use it to distinguish a real
+# deployment (where secrets MUST be provided) from local dev (where we can
+# generate a throwaway secret to stay frictionless).
+_IS_RENDER = bool(os.getenv("RENDER"))
+
+# Secret used to sign stateless session cookies (itsdangerous). Rotating it
+# logs everyone out. On Render it must be set (and persisted) so sessions
+# survive restarts/spin-down; locally we generate an ephemeral one so dev
+# doesn't need any setup — with the caveat that logins reset on each restart.
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+if not SESSION_SECRET:
+    if _IS_RENDER:
+        raise RuntimeError(
+            "SESSION_SECRET must be set in production (Render). "
+            "Set it as an environment variable so sessions survive restarts."
+        )
+    SESSION_SECRET = secrets.token_urlsafe(32)
+    logger.warning(
+        "SESSION_SECRET is not set; generated an ephemeral one. "
+        "All sessions will be invalidated on restart. Set SESSION_SECRET for stable local logins."
+    )
+
+SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "30"))
+# Secure cookies require HTTPS; on by default on Render (always HTTPS), off by
+# default locally so cookies work over http://localhost during development.
+SESSION_COOKIE_SECURE = os.getenv(
+    "SESSION_COOKIE_SECURE", "true" if _IS_RENDER else "false"
+).lower() in {"1", "true", "yes"}
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "cardscan_session")
+
+# Only emails at this domain may be created/log in. Stored without a leading @.
+ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "tritorc.com").lstrip("@").lower()
+
+# First admin, seeded on startup if it doesn't already exist. Set both in the
+# environment (Render dashboard / .env). ADMIN_FORCE_PASSWORD_RESET overwrites
+# the stored hash on next boot (recovery path for a forgotten admin password).
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+ADMIN_FORCE_PASSWORD_RESET = os.getenv("ADMIN_FORCE_PASSWORD_RESET", "false").lower() in {"1", "true", "yes"}
 
 EXCEL_COLUMNS = [
     "date",

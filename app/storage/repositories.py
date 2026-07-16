@@ -24,6 +24,10 @@ FIELD_CANDIDATES = "field_candidates"
 CARD_RECORDS = "card_records"
 DUPLICATE_LINKS = "duplicate_links"
 AUDITS = "audits"
+# Insert-only audit of every scan attempt, keyed by user. Deliberately NOT
+# cascaded by reset_event_data/delete_event so admin stats survive an event
+# being wiped — that's the whole reason it's separate from card_records.
+SCAN_LOG = "scan_log"
 
 _RECORD_FIELDS = getattr(BusinessCardRecord, "model_fields", None) or getattr(BusinessCardRecord, "__fields__", {})
 
@@ -51,6 +55,9 @@ def ensure_indexes() -> None:
     db[DUPLICATE_LINKS].create_index("event_id")
     db[OCR_RESULTS].create_index("card_id")
     db[FIELD_CANDIDATES].create_index("card_id")
+    db[CARD_RECORDS].create_index("scanned_by")
+    db[SCAN_LOG].create_index([("scanned_by", 1), ("created_at", -1)])
+    db[SCAN_LOG].create_index("event_id")
 
 
 # --- Events -----------------------------------------------------------------
@@ -351,6 +358,101 @@ def reset_event_data(event_id: str) -> dict[str, int]:
     db[FIELD_CANDIDATES].delete_many({"event_id": event_id})
     db[AUDITS].delete_many({"event_id": event_id})
     return counts
+
+
+# --- Scan tracking (per-user, insert-only) ----------------------------------
+
+def log_scan(event_id: str, event_name: str, card_id: str, scanned_by: str | None, status: str) -> None:
+    """Record one scan attempt for admin stats. Best-effort: a logging failure
+    must never fail the scan itself, so all errors are swallowed. ``day`` is
+    precomputed from created_at so daily-grouping pipelines stay simple and
+    work under mongomock in tests."""
+    if not scanned_by:
+        return
+    try:
+        now = utc_now()
+        _db()[SCAN_LOG].insert_one(
+            {
+                "_id": new_id("scan"),
+                "card_id": card_id,
+                "event_id": event_id,
+                "event_name": event_name,
+                "scanned_by": scanned_by,
+                "status": status,
+                "created_at": now,
+                "day": now[:10],
+            }
+        )
+    except Exception:  # noqa: BLE001 — stats logging is non-critical
+        pass
+
+
+def scan_totals_by_user() -> list[dict[str, Any]]:
+    """[{email, total, errors, last_scan_at}] across all events, busiest first."""
+    pipeline = [
+        {
+            "$group": {
+                "_id": "$scanned_by",
+                "total": {"$sum": 1},
+                "errors": {"$sum": {"$cond": [{"$eq": ["$status", "error"]}, 1, 0]}},
+                "last_scan_at": {"$max": "$created_at"},
+            }
+        },
+        {"$sort": {"total": -1}},
+    ]
+    return [
+        {"email": row["_id"], "total": row["total"], "errors": row["errors"], "last_scan_at": row.get("last_scan_at")}
+        for row in _db()[SCAN_LOG].aggregate(pipeline)
+        if row.get("_id")
+    ]
+
+
+def scan_counts_by_user_event() -> list[dict[str, Any]]:
+    """[{email, event_id, event_name, count}] — per-user breakdown by event."""
+    pipeline = [
+        {
+            "$group": {
+                "_id": {"u": "$scanned_by", "e": "$event_id"},
+                "event_name": {"$first": "$event_name"},
+                "count": {"$sum": 1},
+            }
+        },
+        {"$sort": {"count": -1}},
+    ]
+    return [
+        {
+            "email": row["_id"]["u"],
+            "event_id": row["_id"]["e"],
+            "event_name": row.get("event_name") or "",
+            "count": row["count"],
+        }
+        for row in _db()[SCAN_LOG].aggregate(pipeline)
+        if row.get("_id", {}).get("u")
+    ]
+
+
+def scan_counts_by_user_day(days: int) -> list[dict[str, Any]]:
+    """[{email, day, count}] for the last ``days`` days (ISO date string compare)."""
+    from datetime import date, timedelta
+
+    cutoff = (date.today() - timedelta(days=max(0, days - 1))).isoformat()
+    pipeline = [
+        {"$match": {"day": {"$gte": cutoff}}},
+        {"$group": {"_id": {"u": "$scanned_by", "d": "$day"}, "count": {"$sum": 1}}},
+        {"$sort": {"_id.d": 1}},
+    ]
+    return [
+        {"email": row["_id"]["u"], "day": row["_id"]["d"], "count": row["count"]}
+        for row in _db()[SCAN_LOG].aggregate(pipeline)
+        if row.get("_id", {}).get("u")
+    ]
+
+
+def count_untracked_records() -> int:
+    """card_records with no scanned_by — cards created before per-user tracking."""
+    return _db()[CARD_RECORDS].count_documents(
+        {"$or": [{"scanned_by": {"$exists": False}}, {"scanned_by": None}]}
+    )
 
 
 def find_duplicate_flag(event_id: str, *, email: str | None, phone: str | None, card_id: str) -> str:

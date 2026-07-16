@@ -6,6 +6,8 @@ import { wireScanScreen, openScanScreen } from "./scan.js";
 import { wireMoreScreen, refreshMoreScreen } from "./more.js";
 import { wireProcessSheet } from "./process-sheet.js";
 import { initQueue, getQueueSnapshot } from "./queue.js";
+import { initAuth, wireAuth, showLogin, applyRoleToUi } from "./auth.js";
+import { wireAdminScreen, refreshAdminScreen } from "./admin.js";
 
 export const state = {
   eventId: null,
@@ -16,11 +18,29 @@ export const state = {
   pendingQueue: [],
   filters: { search: "", needsReviewOnly: false, category: null },
   loading: true,
+  user: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
 
-const ROUTES = ["#/home", "#/records", "#/more"];
+const ROUTES = ["#/home", "#/records", "#/more", "#/admin"];
+
+async function bootData() {
+  await initQueue();
+  const healthPromise = checkHealth();
+  try {
+    await loadEvents();
+  } catch {
+    state.events = [];
+    state.eventId = null;
+    refreshEventLabel(state);
+  }
+  state.loading = false;
+  handleRouteChange();
+  void Promise.allSettled([healthPromise, loadRecords(), loadUsage()]).then(() => {
+    handleRouteChange();
+  });
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireNav();
@@ -29,7 +49,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireRecordsScreen();
   wireScanScreen();
   wireMoreScreen();
+  wireAdminScreen();
   wireProcessSheet();
+  wireAuth({ onLogin: bootData });
+
   window.addEventListener("hashchange", handleRouteChange);
   window.addEventListener("online", handleConnectivityChange);
   window.addEventListener("offline", handleConnectivityChange);
@@ -41,23 +64,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   handleRouteChange();
 
-  await initQueue();
-
-  const healthPromise = checkHealth();
-  try {
-    await loadEvents();
-  } catch {
-    state.events = [];
-    state.eventId = null;
-    refreshEventLabel(state);
+  // Auth boot gate: check for active session
+  const user = await initAuth(state);
+  if (user === null) {
+    // 401: show login overlay, skip data loads
+    showLogin();
+    return;
   }
 
-  state.loading = false;
-  handleRouteChange();
-
-  void Promise.allSettled([healthPromise, loadRecords(), loadUsage()]).then(() => {
-    handleRouteChange();
-  });
+  applyRoleToUi(state);
+  if (user !== "offline") {
+    // user is a logged-in user object, proceed with boot
+    await bootData();
+  }
+  // else: offline, boot proceeded despite no session (PWA fallback)
 
   registerServiceWorker();
 });
@@ -78,7 +98,15 @@ function wireNav() {
 function handleRouteChange() {
   const hash = window.location.hash || "#/home";
   const [routeBase] = hash.split("/").slice(0, 2);
-  const normalized = ROUTES.includes(hash) ? hash : (hash.startsWith("#/records") ? "#/records" : "#/home");
+  let normalized = ROUTES.includes(hash) ? hash : (hash.startsWith("#/records") ? "#/records" : "#/home");
+
+  // Guard: non-admin users can't access #/admin
+  if (normalized === "#/admin" && state.user?.role !== "admin") {
+    normalized = "#/home";
+    window.location.hash = "#/home";
+    return;
+  }
+
   state.route = normalized;
   document.querySelectorAll(".screen[data-screen]").forEach((section) => {
     section.classList.remove("is-active");
@@ -87,7 +115,7 @@ function handleRouteChange() {
     el.classList.toggle("active", el.dataset.route === normalized);
   });
 
-  const screenMap = { "#/home": "screen-home", "#/records": "screen-records", "#/more": "screen-more" };
+  const screenMap = { "#/home": "screen-home", "#/records": "screen-records", "#/more": "screen-more", "#/admin": "screen-admin" };
   const target = document.getElementById(screenMap[normalized]);
   if (target) target.classList.add("is-active");
   document.body.classList.toggle("more-active", normalized === "#/more");
@@ -98,6 +126,7 @@ function handleRouteChange() {
   if (normalized === "#/home" || isDesktop) refreshDashboard(state);
   if (normalized === "#/records" || isDesktop) refreshRecords(state);
   if (normalized === "#/more") refreshMoreScreen(state);
+  if (normalized === "#/admin") refreshAdminScreen(state);
 }
 
 async function checkHealth() {

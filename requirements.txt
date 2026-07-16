@@ -3,6 +3,8 @@ uvicorn[standard]
 python-multipart
 pydantic
 python-dotenv
+bcrypt
+itsdangerous
 Pillow
 openpyxl
 pytest
@@ -11,3 +13,4 @@ google-auth
 requests
 pymongo[srv]
 certifi>=2024.12.14
+mongomock

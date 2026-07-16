@@ -5,6 +5,10 @@ export async function fetchJson(url, options = {}) {
   if (!response.ok) {
     const error = new Error(data.detail || `Request failed: ${response.status}`);
     error.status = response.status;
+    // Dispatch auth:required event on 401 (except for auth endpoints themselves)
+    if (response.status === 401 && url !== "/auth/login" && url !== "/auth/me") {
+      window.dispatchEvent(new CustomEvent("auth:required"));
+    }
     throw error;
   }
   return data;
@@ -63,4 +67,54 @@ export function downloadUrl(eventId) {
 
 export function imageUrl(eventId, filename) {
   return `/events/${eventId}/images/${encodeURIComponent(filename)}`;
+}
+
+// --- Auth endpoints -----
+export function getMe() {
+  return fetchJson("/auth/me");
+}
+
+export function login(email, password) {
+  return fetchJson("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function logout() {
+  return fetchJson("/auth/logout", { method: "POST" });
+}
+
+export function changePassword(currentPassword, newPassword) {
+  return fetchJson("/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+// --- Admin endpoints -----
+export function adminListUsers() {
+  return fetchJson("/admin/users");
+}
+
+export function adminCreateUser(email, password) {
+  return fetchJson("/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function adminPatchUser(email, payload) {
+  return fetchJson(`/admin/users/${encodeURIComponent(email)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function adminStats(days = 30) {
+  return fetchJson(`/admin/stats?days=${Math.min(Math.max(1, days), 365)}`);
 }
