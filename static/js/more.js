@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, displayNameFromEmail } from "./utils.js";
 import { usagePanelHtml } from "./usage-panel.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -88,10 +88,11 @@ export async function refreshMoreScreen(state) {
 }
 
 function renderAccount(state) {
-  const el = $("#accountEmail");
-  if (el && state.user) {
-    el.textContent = `Signed in as ${state.user.email}`;
-  }
+  if (!state.user) return;
+  const nameEl = $("#accountName");
+  if (nameEl) nameEl.textContent = displayNameFromEmail(state.user.email);
+  const emailEl = $("#accountEmail");
+  if (emailEl) emailEl.textContent = state.user.email;
 }
 
 function renderUsage(state) {

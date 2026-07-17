@@ -43,6 +43,8 @@ async function bootData() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  const loadingScreen = $("#loadingScreen");
+
   wireNav();
   wireEventSheet();
   wireDashboard();
@@ -66,6 +68,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Auth boot gate: check for active session
   const user = await initAuth(state);
+
+  // Hide loading screen by removing it completely (most reliable)
+  if (loadingScreen) {
+    loadingScreen.remove();
+  }
+
   if (user === null) {
     // 401: show login overlay, skip data loads
     showLogin();
@@ -75,7 +83,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyRoleToUi(state);
   if (user !== "offline") {
     // user is a logged-in user object, proceed with boot
-    await bootData();
+    document.body.classList.add("bootstrapping");
+    try {
+      await bootData();
+    } finally {
+      document.body.classList.remove("bootstrapping");
+    }
   }
   // else: offline, boot proceeded despite no session (PWA fallback)
 
@@ -119,6 +132,7 @@ function handleRouteChange() {
   const target = document.getElementById(screenMap[normalized]);
   if (target) target.classList.add("is-active");
   document.body.classList.toggle("more-active", normalized === "#/more");
+  document.body.classList.toggle("admin-active", normalized === "#/admin");
 
   // Desktop (>=1024px) renders home + records as one merged 2-pane view via
   // CSS regardless of route, so both must stay populated with fresh data.
@@ -233,9 +247,33 @@ export function showToast(message, variant = "info") {
   if (timeout) window.setTimeout(() => item.remove(), timeout);
 }
 
-function registerServiceWorker() {
+async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+
+    // Check for updates on every page load
+    registration.update().catch(() => {});
+
+    // Clear old caches on registration
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+      const currentCacheName = `cardscan-v${static_assets_version()}`;
+
+      // Delete all caches except the current one
+      await Promise.all(
+        cacheNames
+          .filter(name => !name.includes(currentCacheName))
+          .map(name => caches.delete(name))
+      );
+    }
+  } catch (err) {
+    // Service worker registration failed, but app still works
+  }
 }
+
+// Add this global so we can access it from registerServiceWorker
+let static_assets_version = () => document.querySelector('meta[name="cache-version"]')?.content || "1";
 
 export { handleRouteChange as rerender };

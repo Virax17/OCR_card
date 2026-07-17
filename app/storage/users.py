@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.auth import hash_password, normalize_email
+from app.auth import hash_password, normalize_email, validate_password
 from app.config import ADMIN_EMAIL, ADMIN_FORCE_PASSWORD_RESET, ADMIN_PASSWORD
 from app.storage import mongo
 from app.storage.db import utc_now
@@ -108,3 +108,16 @@ def seed_admin() -> None:
         # Ensure the account is an active admin even if it was changed/disabled.
         _db()[USERS].update_one({"_id": normalize_email(ADMIN_EMAIL)}, {"$set": {"role": "admin", "active": True}})
         logger.warning("ADMIN_FORCE_PASSWORD_RESET applied: reset admin password for %s.", ADMIN_EMAIL)
+
+
+def seed_test_user(email: str, password: str, role: str = "user", created_by: str = "seed") -> None:
+    """Create a test user if it doesn't already exist. Useful for dev/test."""
+    normalized = normalize_email(email)
+    existing = get_user(normalized)
+    if existing is None:
+        try:
+            validate_password(password)
+            create_user(email, hash_password(password), role=role, created_by=created_by)
+            logger.info("Seeded test user %s with role %s.", normalized, role)
+        except ValueError as e:
+            logger.warning("Failed to seed test user %s: %s", normalized, e)

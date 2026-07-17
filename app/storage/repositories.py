@@ -448,6 +448,41 @@ def scan_counts_by_user_day(days: int) -> list[dict[str, Any]]:
     ]
 
 
+def scan_stats_for_user(email: str, days: int) -> dict[str, Any]:
+    """A single user's own totals + daily breakdown — the /me/stats scope, so a
+    non-admin can see their own card-scanning activity without the admin-only
+    /admin/stats endpoint (which returns every user's data)."""
+    from datetime import date, timedelta
+
+    cutoff = (date.today() - timedelta(days=max(0, days - 1))).isoformat()
+    totals_pipeline = [
+        {"$match": {"scanned_by": email}},
+        {
+            "$group": {
+                "_id": "$scanned_by",
+                "total": {"$sum": 1},
+                "errors": {"$sum": {"$cond": [{"$eq": ["$status", "error"]}, 1, 0]}},
+                "last_scan_at": {"$max": "$created_at"},
+            }
+        },
+    ]
+    totals = list(_db()[SCAN_LOG].aggregate(totals_pipeline))
+    daily_pipeline = [
+        {"$match": {"scanned_by": email, "day": {"$gte": cutoff}}},
+        {"$group": {"_id": "$day", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]
+    daily = [{"day": row["_id"], "count": row["count"]} for row in _db()[SCAN_LOG].aggregate(daily_pipeline)]
+    today = date.today().isoformat()
+    return {
+        "total": totals[0]["total"] if totals else 0,
+        "errors": totals[0]["errors"] if totals else 0,
+        "last_scan_at": totals[0].get("last_scan_at") if totals else None,
+        "today": next((row["count"] for row in daily if row["day"] == today), 0),
+        "daily": daily,
+    }
+
+
 def count_untracked_records() -> int:
     """card_records with no scanned_by — cards created before per-user tracking."""
     return _db()[CARD_RECORDS].count_documents(

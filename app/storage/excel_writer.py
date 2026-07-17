@@ -20,16 +20,23 @@ ImageProvider = Callable[[str], "bytes | None"]
 def build_workbook_bytes(
     records: list[BusinessCardRecord],
     image_provider: ImageProvider | None = None,
+    columns: list[str] | None = None,
 ) -> bytes:
     """Build the contacts workbook fully in memory and return the .xlsx bytes.
 
     Card images are fetched via ``image_provider`` (from GridFS) rather than read
-    off disk, so nothing touches the local filesystem.
+    off disk, so nothing touches the local filesystem. ``columns`` lets a caller
+    export only a subset of EXCEL_COLUMNS (e.g. a custom export that skips
+    address/social fields); invalid/unknown names are dropped rather than
+    raising, and an empty/None selection falls back to every column.
     """
+    columns = [c for c in columns if c in EXCEL_COLUMNS] if columns else None
+    columns = columns or EXCEL_COLUMNS
+
     wb = Workbook()
     ws = wb.active
     ws.title = "contacts"
-    ws.append([EXCEL_HEADERS.get(column, column) for column in EXCEL_COLUMNS])
+    ws.append([EXCEL_HEADERS.get(column, column) for column in columns])
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F2937")
@@ -48,11 +55,11 @@ def build_workbook_bytes(
         values["low_confidence_fields"] = ", ".join(record.low_confidence_fields)
         values["reviewed_by_user"] = "Yes" if record.reviewed_by_user else "No"
         values["card"] = ""
-        ws.append([values.get(column) for column in EXCEL_COLUMNS])
+        ws.append([values.get(column) for column in columns])
         row_index = ws.max_row
         ws.row_dimensions[row_index].height = 92
-        if record.front_image_filename and image_provider is not None:
-            _add_card_image(ws, image_provider(record.front_image_filename), row_index, "card")
+        if record.front_image_filename and image_provider is not None and "card" in columns:
+            _add_card_image(ws, image_provider(record.front_image_filename), row_index, "card", columns)
         fill = None
         if record.confidence_score == "Low":
             fill = PatternFill("solid", fgColor="FEE2E2")
@@ -64,7 +71,7 @@ def build_workbook_bytes(
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for col_idx, column in enumerate(EXCEL_COLUMNS, start=1):
+    for col_idx, column in enumerate(columns, start=1):
         width = 38 if column == "card" else min(max(len(EXCEL_HEADERS.get(column, column)) + 2, 14), 42)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -96,8 +103,8 @@ _CARD_THUMBNAIL_MAX_EDGE = 320
 _CARD_THUMBNAIL_QUALITY = 75
 
 
-def _add_card_image(ws, image_bytes: "bytes | None", row_index: int, column: str) -> None:
-    if not image_bytes or column not in EXCEL_COLUMNS:
+def _add_card_image(ws, image_bytes: "bytes | None", row_index: int, column: str, columns: list[str]) -> None:
+    if not image_bytes or column not in columns:
         return
     try:
         # Re-encode as a small JPEG rather than a lossless PNG: the source is
@@ -119,5 +126,5 @@ def _add_card_image(ws, image_bytes: "bytes | None", row_index: int, column: str
         return
     image.width = 140
     image.height = 84
-    col_idx = EXCEL_COLUMNS.index(column) + 1
+    col_idx = columns.index(column) + 1
     ws.add_image(image, f"{get_column_letter(col_idx)}{row_index}")

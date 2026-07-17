@@ -34,7 +34,10 @@ export function showLogin() {
  */
 export function hideLogin() {
   const screen = document.getElementById("loginScreen");
-  if (screen) screen.hidden = true;
+  if (screen) {
+    screen.hidden = true;
+    screen.style.display = 'none'; // Ensure it's hidden via CSS too
+  }
   document.body.classList.remove("auth-locked");
 }
 
@@ -66,19 +69,18 @@ export function wireAuth({ onLogin }) {
     });
   }
 
-  // Logout button
-  const logoutBtn = document.getElementById("logoutBtn");
-  if (logoutBtn) {
-    logoutBtn.addEventListener("click", async (e) => {
-      e.preventDefault();
-      try {
-        await api.logout();
-        location.reload();
-      } catch (err) {
-        showToast("Logout failed: " + err.message, "error");
-      }
-    });
-  }
+  // Logout buttons (Settings screen + header shortcut share the same handler)
+  const doLogout = async (e) => {
+    e.preventDefault();
+    try {
+      await api.logout();
+      location.reload();
+    } catch (err) {
+      showToast("Logout failed: " + err.message, "error");
+    }
+  };
+  document.getElementById("logoutBtn")?.addEventListener("click", doLogout);
+  document.getElementById("headerLogoutBtn")?.addEventListener("click", doLogout);
 
   // Change-password dialog
   const changePasswordSheet = document.getElementById("changePasswordSheet");
@@ -121,12 +123,22 @@ export function applyRoleToUi(state) {
   const isAdmin = state.user?.role === "admin";
 
   // Admin nav items (bottom nav + desktop)
-  document.getElementById("navAdmin")?.hidden !== isAdmin && (document.getElementById("navAdmin").hidden = !isAdmin);
-  document.getElementById("navAdminLink")?.hidden !== isAdmin && (document.getElementById("navAdminLink").hidden = !isAdmin);
+  const navAdmin = document.getElementById("navAdmin");
+  if (navAdmin) navAdmin.hidden = !isAdmin;
+  const navAdminLink = document.getElementById("navAdminLink");
+  if (navAdminLink) navAdminLink.hidden = !isAdmin;
 
-  // Hide destructive buttons for non-admins
+  // Non-admins can scan and download but can't delete records/events or
+  // create new events — mirrors the require_admin guards on the backend
+  // (POST /events, /events/{id}/reset, /events/{id} DELETE).
   if (!isAdmin) {
-    document.getElementById("appBarDeleteBtn")?.hidden !== true && (document.getElementById("appBarDeleteBtn").hidden = true);
-    document.getElementById("moreResetBtn")?.hidden !== true && (document.getElementById("moreResetBtn").hidden = true);
+    const deleteBtn = document.getElementById("appBarDeleteBtn");
+    if (deleteBtn) deleteBtn.hidden = true;
+    const resetBtn = document.getElementById("moreResetBtn");
+    if (resetBtn) resetBtn.hidden = true;
+    const menuResetBtn = document.getElementById("menuResetBtn");
+    if (menuResetBtn) menuResetBtn.hidden = true;
+    const eventNewBtn = document.getElementById("eventNewBtn");
+    if (eventNewBtn) eventNewBtn.hidden = true;
   }
 }

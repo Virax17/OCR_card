@@ -93,3 +93,18 @@ export function initials(name) {
   if (!parts.length) return "?";
   return parts.slice(0, 2).map((part) => part[0].toUpperCase()).join("");
 }
+
+// No user account stores a display name (see app/storage/users.py's
+// _PUBLIC_FIELDS — just email/role/active/timestamps), so this derives a
+// readable one from the email's local-part: "omkar@tritorc.com" -> "Omkar",
+// "michael.ab@micony.com" -> "Michael Ab". Shared by the Admin users table
+// and the Settings/Account panel so both show the same name for the same
+// account.
+export function displayNameFromEmail(email) {
+  const local = String(email || "").split("@")[0];
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || email;
+}

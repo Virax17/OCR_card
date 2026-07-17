@@ -354,8 +354,8 @@ dialog.sheet::backdrop {
 }
 
 .chip.active {
-  background: var(--teal);
-  border-color: var(--teal);
+  background: var(--ink);
+  border-color: var(--ink);
   color: #fff;
 }
 
@@ -735,4 +735,54 @@ dialog.sheet::backdrop {
 .field-row textarea {
   min-height: 72px;
   resize: vertical;
+}
+
+/* Custom export sheet */
+.export-option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-tint);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.export-option-row input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--teal);
+}
+
+.export-fields-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.export-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+
+.export-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: var(--font-sm);
+}
+
+.export-field-row input {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--teal);
 }

@@ -6,7 +6,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,7 +37,7 @@ from app.ocr.google_vision import extract_text_combined as google_vision_extract
 from app.ocr.google_vision import is_google_vision_configured
 from app.auth import require_admin, require_user
 from app.auth_routes import router as auth_router
-from app.storage.users import seed_admin
+from app.storage.users import seed_admin, seed_test_user
 from app.storage.db import new_id, utc_now
 from app.storage.excel_writer import build_workbook_bytes
 from app.storage.repositories import (
@@ -124,6 +124,11 @@ def _seed_mongo_on_startup() -> None:
         ensure_indexes()
         ensure_event(DEFAULT_EVENT_ID, DEFAULT_EVENT_NAME, DEFAULT_EVENT_DATE, "Local")
         seed_admin()
+        # Seed a test user for dev/demo with admin privileges — kept permanent
+        # (see PROTECTED_ADMIN_EMAIL) so the team always has a working login.
+        from app.config import PROTECTED_ADMIN_EMAIL
+
+        seed_test_user(PROTECTED_ADMIN_EMAIL, "Tritorc@123", role="admin", created_by="seed")
     except Exception:  # noqa: BLE001
         pass
 
@@ -198,7 +203,7 @@ def slugify(value: str) -> str:
 
 
 @app.post("/events", response_model=EventOut)
-async def api_create_event(payload: EventIn, user: dict = Depends(require_user)) -> EventOut:
+async def api_create_event(payload: EventIn, admin: dict = Depends(require_admin)) -> EventOut:
     event_id = slugify(f"{payload.name}_{payload.date}")
     ensure_event(event_id, payload.name, payload.date, payload.location)
     event = get_event(event_id)
@@ -686,13 +691,33 @@ async def patch_record(event_id: str, card_id: str, payload: UpdateRecordIn, use
 
 
 @app.get("/events/{event_id}/download")
-async def download_excel(event_id: str, user: dict = Depends(require_user)) -> StreamingResponse:
+async def download_excel(
+    event_id: str,
+    skip_duplicates: bool = Query(False),
+    columns: str | None = Query(None, description="Comma-separated EXCEL_COLUMNS subset; omit for all columns"),
+    category: str | None = Query(None, description="Comma-separated category values to include; omit for all"),
+    search: str | None = Query(None, description="Case-insensitive substring match against name/business/designation"),
+    user: dict = Depends(require_user),
+) -> StreamingResponse:
     records_for_event = list_records(event_id)
+    if skip_duplicates:
+        records_for_event = [r for r in records_for_event if r.duplicate_flag == "No"]
+    if category:
+        wanted = {c.strip().lower() for c in category.split(",") if c.strip()}
+        records_for_event = [r for r in records_for_event if (r.category or "").strip().lower() in wanted]
+    if search:
+        needle = search.strip().lower()
+        records_for_event = [
+            r for r in records_for_event
+            if needle in " ".join(filter(None, [r.name, r.business, r.company, r.designation])).lower()
+        ]
+    selected_columns = [c.strip() for c in columns.split(",") if c.strip()] if columns else None
     # Images come from GridFS (no local files); the workbook is built in memory
     # and streamed straight back — nothing is written to disk.
     workbook_bytes = build_workbook_bytes(
         records_for_event,
         image_provider=lambda filename: (_read_gridfs_image(filename) or (None, None))[0],
+        columns=selected_columns,
     )
     return StreamingResponse(
         BytesIO(workbook_bytes),

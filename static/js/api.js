@@ -61,8 +61,14 @@ export function getUsage() {
   return fetchJson("/llm-usage");
 }
 
-export function downloadUrl(eventId) {
-  return `/events/${eventId}/download`;
+export function downloadUrl(eventId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.skipDuplicates) params.set("skip_duplicates", "true");
+  if (options.columns && options.columns.length) params.set("columns", options.columns.join(","));
+  if (options.categories && options.categories.length) params.set("category", options.categories.join(","));
+  if (options.search) params.set("search", options.search);
+  const query = params.toString();
+  return `/events/${eventId}/download${query ? `?${query}` : ""}`;
 }
 
 export function imageUrl(eventId, filename) {
@@ -99,11 +105,11 @@ export function adminListUsers() {
   return fetchJson("/admin/users");
 }
 
-export function adminCreateUser(email, password) {
+export function adminCreateUser(email, password, role = "user") {
   return fetchJson("/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, role }),
   });
 }
 
@@ -117,4 +123,8 @@ export function adminPatchUser(email, payload) {
 
 export function adminStats(days = 30) {
   return fetchJson(`/admin/stats?days=${Math.min(Math.max(1, days), 365)}`);
+}
+
+export function myStats(days = 30) {
+  return fetchJson(`/me/stats?days=${Math.min(Math.max(1, days), 365)}`);
 }

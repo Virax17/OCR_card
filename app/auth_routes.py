@@ -31,6 +31,7 @@ class ChangePasswordIn(BaseModel):
 class CreateUserIn(BaseModel):
     email: str
     password: str
+    role: str = "user"
 
 
 class PatchUserIn(BaseModel):
@@ -109,13 +110,14 @@ async def admin_create_user(payload: CreateUserIn, admin: dict = Depends(auth.re
         from app.config import ALLOWED_EMAIL_DOMAIN
 
         raise HTTPException(status_code=400, detail=f"Email must end with @{ALLOWED_EMAIL_DOMAIN}")
+    role = payload.role if payload.role in ("admin", "user") else "user"
     try:
         password_hash = auth.hash_password(payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         created = users.create_user(
-            payload.email, password_hash, role="user", created_by=admin["email"]
+            payload.email, password_hash, role=role, created_by=admin["email"]
         )
     except ValueError as exc:  # duplicate
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -124,6 +126,8 @@ async def admin_create_user(payload: CreateUserIn, admin: dict = Depends(auth.re
 
 @router.patch("/admin/users/{email}")
 async def admin_patch_user(email: str, payload: PatchUserIn, admin: dict = Depends(auth.require_admin)) -> dict:
+    from app.config import PROTECTED_ADMIN_EMAIL
+
     target = auth.normalize_email(email)
     if users.get_user(target) is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -132,6 +136,9 @@ async def admin_patch_user(email: str, payload: PatchUserIn, admin: dict = Depen
     # Guard against the admin locking themselves out.
     if payload.active is False and target == admin["email"]:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    # The seeded permanent admin can't be deactivated by anyone, not just itself.
+    if payload.active is False and target == PROTECTED_ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="This account is permanent and cannot be deactivated")
     if payload.active is not None:
         users.set_user_active(target, payload.active)
     if payload.new_password is not None:
@@ -155,3 +162,12 @@ async def admin_stats(days: int = 30, admin: dict = Depends(auth.require_admin))
         "daily": repositories.scan_counts_by_user_day(days),
         "untracked_records": repositories.count_untracked_records(),
     }
+
+
+@router.get("/me/stats")
+async def my_stats(days: int = 30, user: dict = Depends(auth.require_user)) -> dict:
+    """A regular user's own card-scanning activity — the non-admin counterpart
+    to /admin/stats, scoped to just the caller so it doesn't leak other users'
+    numbers. Backs the Home dashboard's per-user tracking card."""
+    days = max(1, min(int(days), 365))
+    return repositories.scan_stats_for_user(user["email"], days)

@@ -4,12 +4,16 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>CardScan</title>
-    <meta name="theme-color" content="#14213d">
+    <meta name="theme-color" content="#0a1526">
+    <meta name="cache-version" content="1">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
-    <link rel="stylesheet" href="/static/css/tokens.css">
-    <link rel="stylesheet" href="/static/css/components.css">
-    <link rel="stylesheet" href="/static/css/screens.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/tokens.css?v=1">
+    <link rel="stylesheet" href="/static/css/components.css?v=1">
+    <link rel="stylesheet" href="/static/css/screens.css?v=1">
   </head>
   <body>
     <svg class="icon-sprite" aria-hidden="true">
@@ -36,26 +40,47 @@
       <symbol id="icon-warning" viewBox="0 0 24 24"><path d="M12 3 2 20h20Z"/><path d="M12 10v4"/><path d="M12 17h.01"/></symbol>
       <symbol id="icon-kebab" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+      <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+      <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.6 8.4-8 10-4.4-1.6-8-5-8-10V6l8-4Z"/></symbol>
     </svg>
 
+    <!-- Loading screen -->
+    <div id="loadingScreen" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--paper);z-index:10000">
+      <div style="text-align:center">
+        <div class="auth-brand-mark">CS</div>
+        <h1 style="margin:20px 0 32px;font-size:24px;color:var(--text)">CardScan</h1>
+        <div style="width:200px;height:4px;background:var(--line);border-radius:2px;overflow:hidden">
+          <div id="loadingBar" style="height:100%;background:var(--teal);width:0%;animation:loading 2s infinite"></div>
+        </div>
+        <p id="loadingText" style="margin-top:24px;color:var(--text-dim);font-size:14px">Connecting to service...</p>
+      </div>
+      <style>
+        @keyframes loading {
+          0% { width: 0%; }
+          50% { width: 70%; }
+          100% { width: 100%; }
+        }
+      </style>
+    </div>
+
     <!-- Login overlay -->
-    <div id="loginScreen" hidden style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);z-index:9999">
-      <div style="background:white;border-radius:8px;padding:32px;max-width:400px;width:90%">
+    <div id="loginScreen" hidden style="position:fixed;inset:0;align-items:center;justify-content:center;background:var(--paper);z-index:9999">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-1);padding:32px;max-width:400px;width:90%">
         <div style="text-align:center;margin-bottom:24px">
-          <div style="font-size:36px;font-weight:bold">CS</div>
-          <h1 style="margin:8px 0 0;font-size:24px">CardScan</h1>
+          <div class="auth-brand-mark">CS</div>
+          <h1 style="margin:12px 0 0;font-size:24px;color:var(--text)">CardScan</h1>
         </div>
         <form id="loginForm">
           <div style="margin-bottom:16px">
-            <label style="display:block;margin-bottom:6px;font-weight:500">Email</label>
-            <input type="email" name="email" placeholder="you@tritorc.com" autocomplete="username" required style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+            <label style="display:block;margin-bottom:6px;font-weight:500;color:var(--text)">Email</label>
+            <input type="email" name="email" placeholder="you@tritorc.com" autocomplete="username" required style="width:100%;padding:8px;border:1px solid var(--line-strong);border-radius:var(--radius);box-sizing:border-box">
           </div>
           <div style="margin-bottom:16px">
-            <label style="display:block;margin-bottom:6px;font-weight:500">Password</label>
-            <input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+            <label style="display:block;margin-bottom:6px;font-weight:500;color:var(--text)">Password</label>
+            <input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required style="width:100%;padding:8px;border:1px solid var(--line-strong);border-radius:var(--radius);box-sizing:border-box">
           </div>
-          <p id="loginError" style="color:#d32f2f;font-size:14px;margin-bottom:16px"></p>
-          <button type="submit" style="width:100%;padding:10px;background:#14213d;color:white;border:none;border-radius:4px;font-weight:500;cursor:pointer">Sign in</button>
+          <p id="loginError" style="color:var(--danger);font-size:14px;margin-bottom:16px"></p>
+          <button type="submit" style="width:100%;padding:10px;background:var(--teal);color:white;border:none;border-radius:var(--radius);font-weight:600;cursor:pointer">Sign in</button>
         </form>
       </div>
     </div>
@@ -64,32 +89,39 @@
       <div class="app-bar-inner">
         <div class="brand-wrap">
           <div class="brand-mark">CS</div>
-          <button id="appBarHomeBtn" class="btn icon-btn app-bar-home" type="button" aria-label="Home" title="Home" data-route="#/home">
-            <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg>
-          </button>
-          <button id="appBarEvent" type="button" aria-label="Switch event">
-            <span class="name">Select event</span>
-            <svg class="icon" aria-hidden="true"><use href="#icon-chevron-down"/></svg>
-          </button>
-          <button id="appBarDeleteBtn" class="btn danger app-bar-delete" type="button" aria-label="Delete event" title="Delete event">
-            <svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg>
-            Delete
-          </button>
-          <nav id="navLinks">
-            <button class="nav-link" id="navLinkScan" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg><span>Scan</span>
-            </button>
-            <button class="nav-link" id="navAdminLink" data-route="#/admin" type="button" hidden>
-              <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg><span>Admin</span>
-            </button>
-            <button class="nav-link" data-route="#/more" type="button">
-              <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>More</span>
-            </button>
-          </nav>
         </div>
+        <span class="app-bar-divider"></span>
+        <button id="appBarEvent" type="button" aria-label="Switch event">
+          <span class="name">Select event</span>
+          <svg class="icon" aria-hidden="true"><use href="#icon-chevron-down"/></svg>
+        </button>
+        <button id="appBarDeleteBtn" class="btn danger app-bar-delete" type="button" aria-label="Delete event" title="Delete event">
+          <svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg>
+          Delete
+        </button>
+        <div class="app-bar-spacer"></div>
+        <nav id="navLinks">
+          <button class="nav-link" data-route="#/home" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-house"/></svg><span>Home</span>
+          </button>
+          <button class="nav-link nav-link-cta" id="navLinkScan" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-camera"/></svg><span>Scan</span>
+          </button>
+          <span class="app-bar-divider"></span>
+          <button class="nav-link" id="navAdminLink" data-route="#/admin" type="button" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg><span>Admin</span>
+          </button>
+          <button class="nav-link" data-route="#/more" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>Settings</span>
+          </button>
+        </nav>
         <button id="netStatus" type="button">
-          <svg class="icon" aria-hidden="true" style="width:14px;height:14px"><use href="#icon-wifi-off"/></svg>
+          <span class="dot" aria-hidden="true"></span>
           <span id="netStatusText">Offline</span>
+        </button>
+        <span class="app-bar-divider"></span>
+        <button class="nav-link" id="headerLogoutBtn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#icon-logout"/></svg><span>Logout</span>
         </button>
       </div>
     </header>
@@ -120,9 +152,14 @@
           <input id="dashUploadInput" type="file" accept="image/*" multiple hidden>
         </div>
 
-        <div id="usageCard" class="usage-card">
+        <div id="usageCard" class="usage-card" hidden>
           <div class="section-label" style="margin-bottom:10px;">API usage</div>
           <div id="usageMeters">Loading...</div>
+        </div>
+
+        <div id="myActivityCard" class="usage-card" hidden>
+          <div class="section-label" style="margin-bottom:10px;">Your activity</div>
+          <div id="myActivityContent">Loading...</div>
         </div>
       </section>
 
@@ -150,7 +187,7 @@
         <div id="recordsTableWrap" class="records-table-wrap">
           <table class="records-table">
             <colgroup>
-              <col class="col-card"><col><col><col><col><col><col class="col-confidence">
+              <col class="col-card"><col class="col-name"><col class="col-company"><col class="col-category"><col class="col-phone"><col class="col-email"><col class="col-confidence">
             </colgroup>
             <thead>
               <tr>
@@ -164,11 +201,14 @@
 
       <!-- S6: More -->
       <section class="screen" id="screen-more" data-screen="more">
-        <div class="screen-title-row"><h1>More</h1></div>
+        <div class="screen-title-row"><h1>Settings</h1></div>
 
         <div class="more-section">
           <h2>Account</h2>
-          <div id="accountEmail" style="margin-bottom:12px;padding:8px;background:#f5f5f5;border-radius:4px"></div>
+          <div class="account-card">
+            <div id="accountName" class="account-card-name"></div>
+            <div id="accountEmail" class="account-card-email"></div>
+          </div>
           <button id="changePasswordBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">Change password</button>
           <button id="logoutBtn" class="btn outline block" type="button">Log out</button>
         </div>
@@ -183,6 +223,10 @@
           <button id="moreExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
             <svg class="icon" aria-hidden="true" style="width:18px;height:18px"><use href="#icon-download"/></svg>
             Export Excel (current event)
+          </button>
+          <button id="moreCustomExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
+            <svg class="icon" aria-hidden="true" style="width:18px;height:18px"><use href="#icon-download"/></svg>
+            Custom export&hellip;
           </button>
           <button id="moreResetBtn" class="btn danger block" type="button">
             <svg class="icon" aria-hidden="true" style="width:18px;height:18px"><use href="#icon-trash"/></svg>
@@ -199,7 +243,6 @@
 
       <!-- Admin portal -->
       <section class="screen" id="screen-admin" data-screen="admin">
-        <div class="screen-title-row"><h1>Admin</h1></div>
         <div id="adminContent">Loading...</div>
       </section>
     </main>
@@ -272,7 +315,7 @@
         <svg class="icon" aria-hidden="true"><use href="#icon-stack"/></svg><span>Admin</span>
       </button>
       <button class="nav-item" id="navMore" data-route="#/more" type="button">
-        <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>More</span>
+        <svg class="icon" aria-hidden="true"><use href="#icon-dots"/></svg><span>Settings</span>
       </button>
     </nav>
 
@@ -400,9 +443,58 @@
         <button id="menuExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
           <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg> Export Excel
         </button>
+        <button id="menuCustomExportBtn" class="btn outline block" type="button" style="margin-bottom:var(--space-2)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg> Custom export&hellip;
+        </button>
         <button id="menuResetBtn" class="btn danger block" type="button">
           <svg class="icon" aria-hidden="true"><use href="#icon-trash"/></svg> Reset event data&hellip;
         </button>
+      </div>
+    </dialog>
+
+    <!-- Custom export: skip duplicates + choose which fields to include -->
+    <dialog id="exportOptionsSheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h2>Custom export</h2>
+        <button id="exportOptionsCloseBtn" class="btn icon-btn" type="button" aria-label="Close">
+          <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <label class="export-option-row">
+          <input type="checkbox" id="exportSkipDuplicates">
+          <span>Skip duplicate records</span>
+        </label>
+
+        <div style="margin-bottom:var(--space-3)">
+          <label class="field-row-label" for="exportSearch" style="display:block;margin-bottom:6px">Name / company contains</label>
+          <input id="exportSearch" type="text" placeholder="e.g. Tritorc" style="width:100%;min-height:40px;border:1px solid var(--line-strong);border-radius:var(--radius);padding:0 var(--space-3)">
+        </div>
+
+        <div id="exportCategoryWrap" hidden>
+          <div class="export-fields-head">
+            <div class="section-label" style="margin:0">Categories</div>
+            <div>
+              <button id="exportCategoryAllBtn" class="btn text-link" type="button" style="padding:2px 6px">All</button>
+              <button id="exportCategoryNoneBtn" class="btn text-link" type="button" style="padding:2px 6px">None</button>
+            </div>
+          </div>
+          <div id="exportCategoryGrid" class="export-field-grid" style="margin-bottom:var(--space-3)"></div>
+        </div>
+
+        <div class="export-fields-head">
+          <div class="section-label" style="margin:0">Fields to include</div>
+          <div>
+            <button id="exportSelectAllBtn" class="btn text-link" type="button" style="padding:2px 6px">All</button>
+            <button id="exportSelectNoneBtn" class="btn text-link" type="button" style="padding:2px 6px">None</button>
+          </div>
+        </div>
+        <div id="exportFieldGrid" class="export-field-grid"></div>
+      </div>
+      <div class="sheet-footer">
+        <button id="exportOptionsCancelBtn" class="btn outline" type="button">Cancel</button>
+        <button id="exportOptionsDownloadBtn" class="btn primary" type="button">Download</button>
       </div>
     </dialog>
 
@@ -433,6 +525,18 @@
         <button id="deleteEventConfirmCancelBtn" class="btn outline" type="button">Cancel</button>
         <button id="deleteEventConfirmBtn" class="btn danger" type="button">Delete event</button>
       </div>
+    </dialog>
+
+    <!-- Per-user scan activity (Admin) -->
+    <dialog id="userActivitySheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <h2 id="userActivityTitle">Activity</h2>
+        <button id="userActivityCloseBtn" class="btn icon-btn" type="button" aria-label="Close">
+          <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+        </button>
+      </div>
+      <div class="sheet-body" id="userActivityBody"></div>
     </dialog>
 
     <!-- Full image viewer -->

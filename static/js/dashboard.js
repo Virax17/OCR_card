@@ -151,7 +151,45 @@ function renderProcessingPill(state) {
   }
 }
 
+// Admins see the shared API-usage/credit panel (it's operational data about
+// the whole deployment); everyone else sees their own scan activity instead
+// — API quotas aren't actionable for a non-admin and were just noise here.
 function renderUsage(state) {
-  const el = $("#usageMeters");
-  el.innerHTML = usagePanelHtml(state.usage, state.health);
+  const isAdmin = state.user?.role === "admin";
+  const usageCard = $("#usageCard");
+  const activityCard = $("#myActivityCard");
+  if (usageCard) usageCard.hidden = !isAdmin;
+  if (activityCard) activityCard.hidden = isAdmin;
+
+  if (isAdmin) {
+    $("#usageMeters").innerHTML = usagePanelHtml(state.usage, state.health);
+    return;
+  }
+  renderMyActivity(state);
+}
+
+async function renderMyActivity(state) {
+  const el = $("#myActivityContent");
+  if (!el) return;
+  try {
+    const stats = await api.myStats(14);
+    const recentDays = (stats.daily || []).slice(-7).reverse();
+    const dayRows = recentDays.length
+      ? recentDays.map((row) => `
+          <div class="admin-activity-row">
+            <div class="who"><div class="name">${escapeHtml(row.day)}</div></div>
+            <div class="delta">${row.count}</div>
+          </div>`).join("")
+      : `<div class="provider-row-note">No scans recorded yet.</div>`;
+    el.innerHTML = `
+      <div class="admin-stat-row" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:var(--space-3)">
+        <div class="admin-stat"><div class="num">${stats.total || 0}</div><div class="label">Total</div></div>
+        <div class="admin-stat good"><div class="num">${stats.today || 0}</div><div class="label">Today</div></div>
+        <div class="admin-stat${stats.errors ? "" : " good"}"><div class="num">${stats.errors || 0}</div><div class="label">Errors</div></div>
+      </div>
+      ${dayRows}
+    `;
+  } catch {
+    el.innerHTML = `<div class="provider-row-note">Activity unavailable — check the connection.</div>`;
+  }
 }

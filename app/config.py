@@ -155,6 +155,12 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_FORCE_PASSWORD_RESET = os.getenv("ADMIN_FORCE_PASSWORD_RESET", "false").lower() in {"1", "true", "yes"}
 
+# The seeded dev/demo admin (see main.py's startup seed_test_user call) — kept
+# permanently active so the team never gets locked out of the deployment.
+# Enforced here (not just hidden client-side) so no admin can deactivate it
+# via a direct API call either.
+PROTECTED_ADMIN_EMAIL = os.getenv("PROTECTED_ADMIN_EMAIL", "a.i@tritorc.com").strip().lower()
+
 EXCEL_COLUMNS = [
     "date",
     "name",
